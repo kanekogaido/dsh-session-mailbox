@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Session mailbox",
+    "description": "Send a message from one DSH session to another top-level session, with the sender session id attached so the receiver knows who is asking. Followers can be restricted to messaging only their leader.",
+    "detail": "docs/DETAIL.md"
+  }
+}

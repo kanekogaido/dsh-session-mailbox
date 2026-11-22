@@ -1,0 +1,42 @@
+{
+  "name": "@local/dsh-session-mailbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-session messaging for DSH: send a message to another top-level session and let the receiver see which session sent it.",
+  "license": "MIT",
+  "author": "kanekogaido",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "bundle",
+    "cross-session",
+    "multi-agent"
+  ],
+  "homepage": "https://github.com/kanekogaido/dsh-session-mailbox#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kanekogaido/dsh-session-mailbox.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kanekogaido/dsh-session-mailbox/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

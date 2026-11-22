@@ -1,0 +1,4 @@
+- insert:
+    - id: session-mailbox
+      name: '@local/dsh-session-mailbox'
+      config: {}

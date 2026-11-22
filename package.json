@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-session-mailbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Cross-session messaging for DSH: send a message to another top-level session and let the receiver see which session sent it.",
+  "description": "Cross-session messaging and durable session-group links for DSH: attach sessions under a parent, send messages with sender attribution, and keep a soft parent/child ACL.",
   "license": "MIT",
   "author": "kanekogaido",
   "keywords": [

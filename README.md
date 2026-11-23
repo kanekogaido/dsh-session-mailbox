@@ -11,8 +11,8 @@ receiver sees which session sent the message and can reply to that session id. I
 durable **parent/child link** between sessions, so a follower reports only to its parent (or its
 own direct children), and a leader can see and change the tree.
 
-> Status: **M1 experimental**. Tested on DSH `0.2.2-rc.5`. APIs used here are Host services and
-> may change between DSH releases.
+> Status: **M2 experimental**. Tested on DSH `0.2.2-rc.5`. APIs used here are Host services and
+> Web Client slots; they may change between DSH releases.
 
 ## Features
 
@@ -28,6 +28,26 @@ own direct children), and a leader can see and change the tree.
   message any session. Siblings and grandparents are not reachable directly.
 - Leader/follower compatibility: `set_session_leader` remains as an alias for attaching the caller
   under a leader.
+- Native-sidebar session tree: parent/child rows with expand/collapse, sibling reordering by drag,
+  re-parenting by dropping on another session, and detach by dropping on the bottom strip.
+- Archived sessions are hidden from the tree, matching the native workspace browser.
+
+## Native sidebar
+
+The bundle's `client.js` replaces the single `sidebar.workspaces` slot with a `SessionBrowser` that
+renders the mailbox tree inside the normal DSH sidebar. It keeps the native workspace grouping,
+search, running badge and session-open behavior, and adds:
+
+- a chevron on a parent row to expand or collapse its children;
+- drag a child onto another child's top or bottom half to reorder siblings;
+- drag a child onto a different session row to re-parent it;
+- drag a child onto the bottom "drag here to leave the parent" strip to detach it;
+- the same tree state in every workspace group, with archived sessions filtered out.
+
+Because this one slot is replaced, native actions that live in the workspace browser itself (pin,
+archive, fork, create/rename workspace) are not rendered by this sidebar. Use the session header's
+native menu or the normal DSH UI for those actions. The tree still reads `archivedSessionIds`, so an
+archived parent disappears instead of being shown twice.
 
 ## Tools
 
@@ -77,7 +97,9 @@ or, when `DSH_PROFILE_DIR` is not set:
 ```
 
 `DSH_SESSION_MAILBOX_STATE` overrides the full path. The file is loaded when the bundle activates
-and rewritten on every attach/detach (temp file + rename). It is a small JSON file, not SQLite.
+and rewritten on every attach, detach or sibling reorder (temp file + rename). Each record stores
+`parentId`, `updatedAt` and `order`; sibling order is the `order` field, not timestamps. It is a
+small JSON file, not SQLite.
 
 ## How delivery works
 
@@ -145,6 +167,8 @@ To update, remove and reinstall the bundle (HMR does not replace the already loa
 plugin_manager remove_bundle target="@local/dsh-session-mailbox"
 plugin_manager install_bundle target="C:\path\to\dsh-session-mailbox"
 ```
+
+After updating, refresh the DSH page once so the replacement `client.js` module is loaded.
 
 ## Quick start: leader and followers
 
@@ -222,36 +246,39 @@ The follower returns to a top-level session and is no longer restricted by the l
   its parent; this is not an authentication boundary.
 - Install only plugins you trust. Plugin code runs in the DSH Host with the Host's privileges.
 
-## Limitations (M1)
+## Limitations (M2)
 
 - Inbound messages are delivered as **user-role** messages. They are not yet a custom
   `MessageSource`; this is the main difference from a native peer-message channel.
 - No SQLite mailbox, outbox, delivery receipts, hold/approval flow, rate limiting, or reply
   correlation ids yet.
 - `hop-chain` is not propagated; loop detection is not implemented.
-- Links are a flat child→parent map with no titles, labels, or ordering.
-- No Web UI badge, tree view, or session picker; the session sidebar still shows sessions in its
-  normal workspace order, and the native subagent tree only appears in the session header.
+- Links are a flat child→parent map with titles and sibling order, but no labels or nested groups.
+- The sidebar replaces `sidebar.workspaces`, so native workspace-browser actions such as pin,
+  archive, fork and workspace create/rename are not part of this UI. The tree respects
+  `archivedSessionIds`; it does not provide an archive button of its own.
 - A session can belong to only one parent; attaching elsewhere replaces the old link.
 - Sessions must run in the same DSH Host/profile. Cross-machine delivery is out of scope.
 
 ## Roadmap
 
-- **M2**: Web client panel with a session tree (connector lines, drag a child in/out, drag a parent
-  with its subtree), a "sent by session X" badge, and a session picker.
+- **M2 (done)**: native-sidebar session tree with parent/child rows, expand/collapse, sibling drag
+  reordering, re-parenting, detach, and archived-session filtering.
 - **M3**: custom `MessageSource` + `agent/pre-step` injection, hold/approval, receipt rate limiting,
   hop-chain propagation, and optional SQLite storage.
 - **M4 (optional)**: signed cross-machine delivery and machine allowlists.
 
 ## Development
 
-The bundle is plain ESM; there is no build step.
+The bundle is plain ESM on the Host and a `window.__ModuleLoader__` factory on the Client; there is
+no build step.
 
 ```text
 .
 ├── package.json          # DSH bundle manifest
 ├── cordis.patch.yml      # inserts the bundle row into the Host composition
-├── index.js              # tools, link store, delivery logic
+├── index.js              # tools, link store, delivery logic, HTTP routes
+├── client.js             # native-sidebar session tree (sidebar.workspaces occupant)
 ├── locale/               # plugin-manager display metadata
 ├── docs/DETAIL.md        # longer description shown by the plugin manager
 └── icon.svg

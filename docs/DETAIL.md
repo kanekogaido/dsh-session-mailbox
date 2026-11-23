@@ -16,6 +16,16 @@ parent and kept in a persisted tree.
 - `list_session_tree()` — list all persisted links as `{ sessionId, parentId }` pairs plus roots.
 - `set_session_leader({ leader })` — alias for attaching the caller under a leader.
 
+## Native sidebar
+
+The Client module replaces the `sidebar.workspaces` slot with a session browser that draws the
+persisted links as a tree inside the normal DSH sidebar. It keeps workspace grouping, search,
+running badges and session opening, and adds expand/collapse, sibling drag reordering, dropping a
+child on another session to re-parent it, dropping it on the bottom strip to detach, and hiding
+archived sessions (the same `archivedSessionIds` state the native browser uses). Because one slot is
+replaced, native workspace-browser actions such as pin, archive, fork and workspace create/rename
+are not rendered by this sidebar.
+
 ## Link model
 
 A link is an adoption/control relation, not a native subagent creation relation. It changes who may
@@ -33,8 +43,9 @@ or sidebar visibility.
 
 Links live in `<DSH_PROFILE_DIR>\session-mailbox\groups.json` (falling back to
 `%USERPROFILE%\.dsh\profiles\<profile>\session-mailbox\groups.json`). `DSH_SESSION_MAILBOX_STATE`
-overrides the path. The file is read when the bundle activates and rewritten after every change,
-using a temp file and rename. Deleting it resets all links.
+overrides the path. The file is read when the bundle activates and by each HTTP mutation; it is
+rewritten after every change using a temp file and rename. Records carry `parentId`, `updatedAt`
+and `order`; sibling order is stored explicitly. Deleting it resets all links.
 
 ## How a leader/follower run works
 
@@ -54,9 +65,9 @@ using a temp file and rename. Deleting it resets all links.
 - Only exact session ids are accepted; titles and fuzzy matching are not implemented.
 - There is no durable outbox, hold-for-approval queue, reply correlation id, rate limit, or
   hop-chain propagation beyond the single sender id.
-- Links are a flat child→parent map with no titles, labels, or ordering.
-- No Web UI: the sidebar does not draw the tree, and dragging a parent with its subtree is not
-  available yet. The native subagent tree in the session header is a different, creation-time
-  relation.
+- Links are a flat child→parent map with titles and sibling order, but no labels or nested groups.
+- The sidebar replaces `sidebar.workspaces`, so native pin/archive/fork/workspace actions are not
+  part of this UI. It hides archived sessions but has no archive button of its own. The native
+  subagent tree in the session header is a different, creation-time relation.
 - Any top-level session can message any other session. A child can detach itself. The link is a
   workflow constraint, not a security boundary.

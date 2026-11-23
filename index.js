@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -34,6 +34,7 @@ function loadGroups() {
     const parsed = JSON.parse(readFileSync(file, 'utf8'))
     const groups = new Map()
     if (parsed && typeof parsed === 'object' && parsed.groups && typeof parsed.groups === 'object') {
+      let fallbackOrder = 0
       for (const [childId, record] of Object.entries(parsed.groups)) {
         if (!ID_RE.test(childId)) continue
         const parentId = record && typeof record.parentId === 'string' ? record.parentId.trim() : ''
@@ -41,7 +42,9 @@ function loadGroups() {
         groups.set(childId, {
           parentId,
           updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : new Date().toISOString(),
+          order: record && Number.isFinite(record.order) ? record.order : fallbackOrder,
         })
+        fallbackOrder += 1
       }
     }
     return groups
@@ -57,7 +60,7 @@ function saveGroups(groups) {
   mkdirSync(dirname(file), { recursive: true })
   const records = {}
   for (const [childId, record] of groups) {
-    records[childId] = { parentId: record.parentId, updatedAt: record.updatedAt }
+    records[childId] = { parentId: record.parentId, updatedAt: record.updatedAt, order: record.order }
   }
   const text = `${JSON.stringify({
     version: 1,
@@ -88,7 +91,11 @@ function directChildren(groups, sessionId) {
   for (const [childId, record] of groups) {
     if (record.parentId === sessionId) children.push(childId)
   }
-  children.sort()
+  children.sort((a, b) => {
+    const left = groups.get(a)?.order ?? 0
+    const right = groups.get(b)?.order ?? 0
+    return left - right || a.localeCompare(b)
+  })
   return children
 }
 
@@ -107,13 +114,43 @@ function assertNoCycle(groups, childId, parentId) {
   }
 }
 
-function link(groups, childId, parentId) {
+function link(groups, childId, parentId, requestedOrder) {
   assertNoCycle(groups, childId, parentId)
   const previous = parentOf(groups, childId)
-  if (previous === parentId) return { changed: false, previous }
-  groups.set(childId, { parentId, updatedAt: new Date().toISOString() })
+  const previousRecord = groups.get(childId)
+  if (previous === parentId && !Number.isFinite(requestedOrder)) return { changed: false, previous }
+  let order = Number.isFinite(requestedOrder) ? requestedOrder : undefined
+  if (!Number.isFinite(order)) {
+    const siblings = directChildren(groups, parentId).filter((id) => id !== childId)
+    const maxOrder = siblings.reduce((max, id) => Math.max(max, groups.get(id)?.order ?? 0), -1)
+    order = maxOrder + 1
+  }
+  groups.set(childId, {
+    parentId,
+    updatedAt: new Date().toISOString(),
+    order,
+  })
   saveGroups(groups)
-  return { changed: true, previous }
+  return { changed: previous !== parentId || previousRecord?.order !== order, previous }
+}
+
+function reorder(groups, childId, targetId, after) {
+  const parentId = parentOf(groups, childId)
+  if (!parentId) throw new Error('only an attached session can be reordered')
+  if (parentOf(groups, targetId) !== parentId) {
+    throw new Error('can only reorder sessions that share the same parent')
+  }
+  const siblings = directChildren(groups, parentId).filter((id) => id !== childId)
+  const index = siblings.indexOf(targetId)
+  if (index < 0) throw new Error('target session is not a sibling')
+  siblings.splice(after ? index + 1 : index, 0, childId)
+  const now = new Date().toISOString()
+  siblings.forEach((id, position) => {
+    const record = groups.get(id)
+    if (record) groups.set(id, { ...record, order: position, updatedAt: now })
+  })
+  saveGroups(groups)
+  return { changed: true, parentId }
 }
 
 function unlink(groups, childId) {
@@ -167,8 +204,261 @@ function envelope(senderId, message, parentId) {
   return lines.join('\n')
 }
 
+function treeVersion(groups) {
+  const edges = [...groups]
+    .map(([childId, record]) => [childId, record.parentId, record.order ?? 0])
+    .sort((a, b) => a[0].localeCompare(b[0]))
+  return createHash('sha1').update(JSON.stringify(edges)).digest('hex').slice(0, 16)
+}
+
+function audit(event) {
+  try {
+    const file = join(dirname(statePath()), 'audit.jsonl')
+    mkdirSync(dirname(file), { recursive: true })
+    appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, 'utf8')
+  } catch {
+    // Audit is best effort; the durable link file remains the source of truth.
+  }
+}
+
+async function readJson(request) {
+  const chunks = []
+  let total = 0
+  for await (const chunk of request) {
+    total += chunk.length
+    if (total > 64 * 1024) throw new Error('request body is too large')
+    chunks.push(chunk)
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim()
+  if (!text) return {}
+  return JSON.parse(text)
+}
+
+function logReorder(event, details) {
+  try {
+    const file = join(dirname(statePath()), 'client-log.jsonl')
+    mkdirSync(dirname(file), { recursive: true })
+    appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), event, ...details }) + '\n', 'utf8')
+  } catch {
+    // A diagnostic write must not affect the route.
+  }
+}
+
+function sendJson(response, status, value) {
+  response.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  })
+  response.end(JSON.stringify(value))
+}
+
 export function apply(ctx) {
   const groups = loadGroups()
+
+  let sessionQuery
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['sessionQuery'], (scope) => { sessionQuery = scope.sessionQuery })
+  }
+
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['webServer', 'connection'], (scope) => {
+      const guarded = (handler) => async (request, response) => {
+        try {
+          const rejection = scope.connection && typeof scope.connection.requestRejection === 'function'
+            ? scope.connection.requestRejection(request)
+            : undefined
+          if (rejection) {
+            sendJson(response, rejection, { ok: false, error: 'unauthorized' })
+            return
+          }
+          await handler(request, response)
+        } catch (error) {
+          sendJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+
+      const stateForClient = async () => {
+        const current = loadGroups()
+        const list = await ctx.sessionController.list({})
+        const items = Array.isArray(list && list.items) ? list.items : []
+        const titles = new Map()
+        if (sessionQuery && typeof sessionQuery.readTitleSnapshots === 'function' && items.length > 0) {
+          try {
+            const results = await sessionQuery.readTitleSnapshots(items.map((item) => item.sessionId))
+            for (const result of results || []) {
+              if (result && result.status === 'fulfilled' && result.value && result.value.title && result.value.title.title) {
+                titles.set(result.sessionId, result.value.title.title)
+              }
+            }
+          } catch {
+            // Titles are optional decoration; ids still render.
+          }
+        }
+        const edges = [...current].map(([childId, record]) => ({
+          childId,
+          parentId: record.parentId,
+          updatedAt: record.updatedAt,
+          order: record.order ?? 0,
+        })).sort((a, b) => a.parentId.localeCompare(b.parentId) || (a.order - b.order) || a.childId.localeCompare(b.childId))
+        const sessions = items.map((item) => ({
+          sessionId: item.sessionId,
+          title: titles.get(item.sessionId) || '',
+          cwd: item.cwd || '',
+          running: item.running === true,
+          updatedAt: item.updatedAt || 0,
+          origin: item.origin || '',
+          nativeParentId: item.parentSessionId || '',
+        }))
+        return {
+          ok: true,
+          version: treeVersion(current),
+          updatedAt: new Date().toISOString(),
+          edges,
+          sessions,
+        }
+      }
+
+      const disposers = []
+      disposers.push(scope.webServer.register({
+        kind: 'exact',
+        path: '/session-mailbox/state',
+        handler: guarded(async (request, response) => {
+          if (request.method !== 'GET' && request.method !== 'HEAD') {
+            sendJson(response, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          sendJson(response, 200, await stateForClient())
+        }),
+      }))
+
+      disposers.push(scope.webServer.register({
+        kind: 'exact',
+        path: '/session-mailbox/attach',
+        handler: guarded(async (request, response) => {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const body = await readJson(request)
+          const childId = readId(body, 'childId')
+          const parentId = readId(body, 'parentId')
+          if (childId === parentId) throw new Error('a session cannot be attached to itself')
+          const known = new Set(((await ctx.sessionController.list({})).items || []).map((item) => item.sessionId))
+          if (!known.has(childId) || !known.has(parentId)) {
+            sendJson(response, 404, { ok: false, error: 'session not found' })
+            return
+          }
+          const expected = typeof body.expectedParentId === 'string' ? body.expectedParentId.trim() : undefined
+          const currentGroups = loadGroups()
+          const current = parentOf(currentGroups, childId) || ''
+          if (expected !== undefined && expected !== current) {
+            sendJson(response, 409, { ok: false, error: 'stale', parentId: current })
+            return
+          }
+          try {
+            const result = link(currentGroups, childId, parentId)
+            audit({ action: 'attach', childId, parentId, actor: 'ui', changed: result.changed })
+            sendJson(response, 200, { ok: true, changed: result.changed, version: treeVersion(currentGroups) })
+          } catch (error) {
+            sendJson(response, 409, { ok: false, error: error instanceof Error ? error.message : String(error) })
+          }
+        }),
+      }))
+
+      disposers.push(scope.webServer.register({
+        kind: 'exact',
+        path: '/session-mailbox/detach',
+        handler: guarded(async (request, response) => {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const body = await readJson(request)
+          const childId = readId(body, 'childId')
+          const expected = typeof body.expectedParentId === 'string' ? body.expectedParentId.trim() : undefined
+          const currentGroups = loadGroups()
+          const current = parentOf(currentGroups, childId) || ''
+          if (expected !== undefined && expected !== current) {
+            sendJson(response, 409, { ok: false, error: 'stale', parentId: current })
+            return
+          }
+          const result = unlink(currentGroups, childId)
+          audit({ action: 'detach', childId, actor: 'ui', changed: result.detached })
+          sendJson(response, 200, { ok: true, detached: result.detached, version: treeVersion(currentGroups) })
+        }),
+      }))
+
+      disposers.push(scope.webServer.register({
+        kind: 'exact',
+        path: '/session-mailbox/reorder',
+        handler: guarded(async (request, response) => {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const body = await readJson(request)
+          const childId = readId(body, 'childId')
+          const targetId = readId(body, 'targetId')
+          const after = body.after === true
+          const details = { childId, targetId, after }
+          logReorder('host-reorder-received', details)
+          if (childId === targetId) throw new Error('a session cannot be reordered against itself')
+          const known = new Set(((await ctx.sessionController.list({})).items || []).map((item) => item.sessionId))
+          if (!known.has(childId) || !known.has(targetId)) {
+            logReorder('reorder-error', {
+              ...details, status: 404, message: 'session not found',
+              childKnown: known.has(childId), targetKnown: known.has(targetId),
+            })
+            sendJson(response, 404, { ok: false, error: 'session not found' })
+            return
+          }
+          try {
+            const currentGroups = loadGroups()
+            const result = reorder(currentGroups, childId, targetId, after)
+            audit({ action: 'reorder', ...details, actor: 'ui', changed: result.changed })
+            sendJson(response, 200, { ok: true, changed: result.changed, parentId: result.parentId, version: treeVersion(currentGroups) })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            logReorder('reorder-error', { ...details, status: 409, message })
+            sendJson(response, 409, { ok: false, error: message })
+          }
+        }),
+      }))
+
+      disposers.push(scope.webServer.register({
+        kind: 'exact',
+        path: '/session-mailbox/client-log',
+        handler: guarded(async (request, response) => {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { ok: false, error: 'method not allowed' })
+            return
+          }
+          const body = await readJson(request)
+          const line = JSON.stringify({ at: new Date().toISOString(), ...body }) + '\n'
+          const logPath = join(dirname(statePath()), 'client-log.jsonl')
+          mkdirSync(dirname(logPath), { recursive: true })
+          appendFileSync(logPath, line, 'utf8')
+          sendJson(response, 200, { ok: true })
+        }),
+      }))
+
+      disposers.push(scope.webServer.register({
+        kind: 'exact',
+        path: '/session-mailbox/ping',
+        handler: guarded(async (_request, response) => {
+          sendJson(response, 200, { ok: true, links: groups.size, version: treeVersion(groups) })
+        }),
+      }))
+
+      if (typeof scope.effect === 'function') {
+        scope.effect(() => () => {
+          for (const dispose of disposers) {
+            if (typeof dispose === 'function') dispose()
+          }
+        })
+      }
+    })
+  }
 
   ctx.tools.register({
     name: 'get_current_session',

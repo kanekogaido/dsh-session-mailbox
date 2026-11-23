@@ -1,9 +1,9 @@
 {
   "name": "@local/dsh-session-mailbox",
-  "version": "0.2.0",
+  "version": "0.3.15",
   "private": true,
   "type": "module",
-  "description": "Cross-session messaging and durable session-group links for DSH: attach sessions under a parent, send messages with sender attribution, and keep a soft parent/child ACL.",
+  "description": "Cross-session links, mailbox ACL, and a native-sidebar session tree for DeepSeek Harness.",
   "license": "MIT",
   "author": "kanekogaido",
   "keywords": [
@@ -24,11 +24,13 @@
   },
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
+    "client.js",
     "cordis.patch.yml",
     "locale/*.json",
     "docs",
@@ -37,6 +39,9 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   }
 }

@@ -10,8 +10,8 @@
 session id，并可以用同一个工具回复。它还维护**持久化的父子链接**：跟随者只向父会话（或自己
 的直接子会话）汇报，领导者可以查看和修改这棵树。
 
-> 状态：**M1 实验版**，已在 DSH `0.2.2-rc.5` 上实测。使用的是 DSH Host 服务，后续 DSH
-> 版本可能调整接口。
+> 状态：**M2 实验版**，已在 DSH `0.2.2-rc.5` 上实测。使用 DSH Host 服务与 Web Client
+> slot，后续 DSH 版本可能调整接口。
 
 ## 能力
 
@@ -26,6 +26,24 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 - 软 ACL：子会话可以给父会话或自己的直接子会话发消息；顶层会话可以给任意会话发消息。兄弟、
   祖父、孙子和无关会话不能直接互发，需要沿父子链转发。
 - 兼容领导者/跟随者：`set_session_leader` 保留为「把当前会话挂到领导者下」的别名。
+- 原生侧栏会话树：父子行、展开/收起，拖动子会话调整兄弟顺序，拖到别的会话行改挂，拖到底部
+  投放条移出父会话。
+- 与原生一致地隐藏已归档会话。
+
+## 原生侧栏
+
+`client.js` 替换 `sidebar.workspaces` 这个单一 slot，用 `SessionBrowser` 在正常侧栏里渲染
+邮箱树。它保留原生工作区分组、搜索、运行状态点和点击打开会话，并增加：
+
+- 父会话行左侧的箭头用于展开/收起子会话；
+- 把子会话拖到另一个子会话的上半区/下半区，调整兄弟顺序；
+- 把子会话拖到另一个会话行，改挂到它下面；
+- 把子会话拖到底部“移出父会话”投放条，恢复为顶层；
+- 树状态跨工作区分组共享；已归档会话会被过滤掉。
+
+因为替换的是这一个 slot，原生工作区浏览器里的 pin、归档、fork、新建/重命名工作区等操作
+**不会**出现在这个侧栏里，需要使用会话头部菜单或 DSH 原生 UI。树仍会读取
+`archivedSessionIds`，所以归档的父会话会消失，而不是显示成两行。
 
 ## 工具
 
@@ -70,8 +88,10 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 %USERPROFILE%\.dsh\profiles\<DSH_PROFILE 或 desktop>\session-mailbox\groups.json
 ```
 
-`DSH_SESSION_MAILBOX_STATE` 可覆盖完整路径。文件在 bundle 激活时加载，每次 attach/detach
-后重写（临时文件 + rename）。它是小 JSON 文件，不是 SQLite。
+`DSH_SESSION_MAILBOX_STATE` 可覆盖完整路径。文件在 bundle 激活时加载，每次
+attach/detach 或兄弟重排后重写（临时文件 + rename）。每条记录包含 `parentId`、
+`updatedAt` 和 `order`；兄弟顺序以 `order` 为准，不再按时间戳排序。它是小 JSON 文件，
+不是 SQLite。
 
 ## 投递方式
 
@@ -137,6 +157,8 @@ git clone https://github.com/kanekogaido/dsh-session-mailbox.git
 plugin_manager remove_bundle target="@local/dsh-session-mailbox"
 plugin_manager install_bundle target="C:\path\to\dsh-session-mailbox"
 ```
+
+更新后刷新一次 DSH 页面，让替换的 `client.js` 模块重新加载。
 
 ## 快速开始：领导者与跟随者
 
@@ -210,42 +232,43 @@ detach_session({ child: "session-<follower-id>" })
 - 链接是存在 JSON 文件里的软约束；会话可以自己 detach 或改父会话，不是身份认证边界。
 - 只安装你信任的插件。插件代码在 DSH Host 内运行，拥有 Host 的权限。
 
-## M1 限制
+## M2 限制
 
 - 入站消息是 **user 角色**，还不是自定义 `MessageSource`；这是与原生 peer 消息通道的主
   要差距。
 - 还没有 SQLite 邮箱、outbox、投递回执、hold/审批流、限流、回复关联 id。
 - `hop-chain` 不传播，未实现防环。
-- 链接是扁平的 child→parent 映射，没有标题、标签或排序。
-- 没有 Web UI 徽标、树视图或会话选择器；侧边栏仍按 Workspace 顺序显示会话，原生 subagent
-  树只在会话头部出现。
+- 链接是扁平的 child→parent 映射，有标题和兄弟顺序，但没有标签或嵌套分组。
+- 侧栏替换了 `sidebar.workspaces`，因此原生工作区浏览器里的 pin、归档、fork、新建/重命名
+  工作区等操作不在这个 UI 里；树只读取 `archivedSessionIds`，不提供归档按钮。
 - 一个会话只能有一个父会话；挂到别处会替换旧链接。
 - 只支持同一 DSH Host/profile 内的会话；跨机器投递不在范围内。
 
 ## 路线图
 
-- **M2**：Web 客户端面板——带连线的会话树（子会话拖入/拖出、父会话带整棵子树拖动）、
-  「来自会话 X」徽标、会话选择器。
+- **M2（已完成）**：原生侧栏会话树——父子行、展开/收起、兄弟拖动排序、改挂、移出、归档
+  会话过滤。
 - **M3**：自定义 `MessageSource` + `agent/pre-step` 注入、hold/审批、回执限流、hop-chain
   传播、可选 SQLite 存储。
 - **M4（可选）**：跨机器签名投递与机器白名单。
 
 ## 开发
 
-纯 ESM，没有构建步骤：
+Host 是纯 ESM，Client 是 `window.__ModuleLoader__` 工厂；没有构建步骤：
 
 ```text
 .
 ├── package.json          # DSH bundle 清单
 ├── cordis.patch.yml      # 把 bundle 行插入 Host 组合
-├── index.js              # 工具、链接存储、投递逻辑
+├── index.js              # 工具、链接存储、投递逻辑、HTTP 路由
+├── client.js             # 原生侧栏会话树（sidebar.workspaces occupant）
 ├── locale/               # 插件管理器显示元数据
 ├── docs/DETAIL.md        # 插件管理器里的详细说明
 └── icon.svg
 ```
 
-修改 `index.js` 后需要卸载再安装（或重启 DSH）才会加载新模块。首次 `attach_session` 时
-创建状态文件；删除它会重置所有链接。
+修改 `index.js` 或 `client.js` 后需要卸载再安装并刷新页面（或重启 DSH）才会加载新模块。
+首次 `attach_session` 时创建状态文件；删除它会重置所有链接。
 
 ## 许可证
 

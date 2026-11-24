@@ -30,7 +30,10 @@ own direct children), and a leader can see and change the tree.
   under a leader.
 - Native-sidebar session tree: parent/child rows with expand/collapse, sibling reordering by drag,
   re-parenting by dropping on another session, and detach by dropping on the bottom strip.
-- Archived sessions are hidden from the tree, matching the native workspace browser.
+- Archive and unarchive sessions from the row menu. A running session asks before stopping its
+  activity; archiving a parent hides its whole subtree without unlinking it, and an “已归档 N”
+  toolbar entry restores sessions. The undo toast can also bring one back immediately.
+- Archived sessions are hidden from the active tree, matching the native workspace browser.
 - New-session intent: an ordinary “新建一个会话 / 开个新会话 / 再来一个会话” request is handled by the
   assistant through `create_child_session`, creating a child under the current session in this tree.
   Only an explicit “创建子 agent / 子代理” request uses a native subagent; there is no extra
@@ -53,12 +56,14 @@ search, running badge and session-open behavior, and adds:
 - drag a child onto another child's top or bottom half to reorder siblings;
 - drag a child onto a different session row to re-parent it;
 - drag a child onto the bottom "drag here to leave the parent" strip to detach it;
+- archive/unarchive from the row menu, with a confirmation when the session is running or has
+  children; archived parents keep their links and hide their subtree until restored;
 - the same tree state in every workspace group, with archived sessions filtered out.
 
 Because this one slot is replaced, native actions that live in the workspace browser itself (pin,
-archive, fork, create/rename workspace) are not rendered by this sidebar. Use the session header's
-native menu or the normal DSH UI for those actions. The tree still reads `archivedSessionIds`, so an
-archived parent disappears instead of being shown twice. The plugin does **not** add a New Session
+fork, create/rename workspace) are not rendered by this sidebar. Use the session header's native
+menu or the normal DSH UI for those actions. Archive is provided by this sidebar itself, using the
+same native `archiveSession`/`unarchiveSession` APIs. The plugin does **not** add a New Session
 button to this sidebar; the new-session behavior is the assistant tool policy described above.
 
 ## Tools

@@ -38,12 +38,16 @@ main session directly.
 The Client module replaces the `sidebar.workspaces` slot with a session browser that draws the
 persisted links as a tree inside the normal DSH sidebar. It keeps workspace grouping, search,
 running badges and session opening, and adds expand/collapse, sibling drag reordering, dropping a
-child on another session to re-parent it, dropping it on the bottom strip to detach, and hiding
-archived sessions (the same `archivedSessionIds` state the native browser uses). Because one slot is
-replaced, native workspace-browser actions such as pin, archive, fork and workspace create/rename
-are not rendered by this sidebar. The plugin also does not add a “New session” button; instead, the
-Host registers a `session-mailbox:new-session-policy` system-prompt section that maps ordinary
-new-session requests to `create_child_session` under the current session.
+child on another session to re-parent it, dropping it on the bottom strip to detach, and
+archive/unarchive from the row menu. Archiving a running session first confirms that its activity
+will stop; archiving a parent only marks that session archived and hides its whole subtree without
+unlinking it. An “已归档 N” toolbar entry lists direct archived rows and restores them. The tree
+reads `archivedSessionIds` (the same state the native browser uses). Because one slot is replaced,
+native workspace-browser actions such as pin, fork and workspace create/rename are not rendered by
+this sidebar; archive is provided here through `archiveSession`/`unarchiveSession`. The plugin also
+does not add a “New session” button; instead, the Host registers a
+`session-mailbox:new-session-policy` system-prompt section that maps ordinary new-session requests
+to `create_child_session` under the current session.
 
 ## Link model
 
@@ -110,8 +114,9 @@ delegate further unless the task explicitly tells them to.
 - There is no durable outbox, hold-for-approval queue, reply correlation id, rate limit, or
   hop-chain propagation beyond the single sender id.
 - Links are a flat child→parent map with titles and sibling order, but no labels or nested groups.
-- The sidebar replaces `sidebar.workspaces`, so native pin/archive/fork/workspace actions are not
-  part of this UI. It hides archived sessions but has no archive button of its own. The native
-  subagent tree in the session header is a different, creation-time relation.
+- The sidebar replaces `sidebar.workspaces`, so native pin/fork/workspace actions are not part of
+  this UI. Archive is provided by the sidebar itself through `archiveSession`/`unarchiveSession`, but
+  the native multi-select/batch archive view is not. The native subagent tree in the session header
+  is a different, creation-time relation.
 - Any top-level session can message any other session. A child can detach itself. The link is a
   workflow constraint, not a security boundary.

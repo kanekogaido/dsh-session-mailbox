@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
     }
 
     const API = '/session-mailbox'
-    const CLIENT_VERSION = '0.3.23'
+    const CLIENT_VERSION = '0.3.24'
     const NO_FOLDER = '无文件夹'
 
     /* ---------------------------------------------------------------------
@@ -175,6 +175,30 @@ window.__ModuleLoader__.load({
 .sm-menu-item .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .sm-menu-item:hover,.sm-menu-item:focus-visible{background:var(--sm-hover);outline:none}
 .sm-menu-item[data-danger="1"]{color:var(--sm-danger)}
+
+/* 已归档 */
+.sm-arch-toggle{display:flex;align-items:center;width:auto;padding:0 6px;gap:4px;font-size:10px;color:var(--sm-fg-3)}
+.sm-arch-toggle[data-on="1"]{background:var(--sm-brand-bg);color:var(--sm-brand)}
+.sm-arch-n{font-variant-numeric:tabular-nums;opacity:.8}
+.sm-archived{margin-top:12px;padding-top:10px;border-top:1px solid var(--sm-hair)}
+.sm-arch-head{display:flex;align-items:center;height:22px;padding:0 6px;color:var(--sm-fg-3);font-size:10.5px;font-weight:600;letter-spacing:.04em}
+.sm-arch-row{display:flex;align-items:center;height:30px;padding:0 6px 0 26px;border-radius:6px;color:var(--sm-fg-3);font-size:12px}
+.sm-arch-row:hover{background:var(--sm-hover);color:var(--sm-fg-2)}
+.sm-arch-row .sm-title{font-weight:400;color:inherit}
+.sm-arch-restore{flex:none;border:0;background:transparent;color:var(--sm-brand);font:inherit;font-size:11px;padding:2px 5px;border-radius:4px;cursor:pointer}
+.sm-arch-restore:hover{background:var(--sm-hover)}
+
+/* 归档确认框 */
+.sm-modal-bd{position:absolute;inset:0;z-index:10000;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.45);backdrop-filter:blur(1px)}
+.sm-modal{width:100%;max-width:360px;padding:14px;border-radius:10px;background:var(--sm-pop);border:1px solid var(--sm-ring);box-shadow:0 24px 50px rgba(0,0,0,.5)}
+.sm-modal-title{font-size:13px;font-weight:600;color:var(--sm-fg);margin-bottom:6px}
+.sm-modal-text{font-size:12px;line-height:18px;color:var(--sm-fg-2);white-space:pre-wrap}
+.sm-modal-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:14px}
+.sm-modal-btn{border:0;border-radius:6px;padding:6px 10px;background:var(--sm-badge);color:var(--sm-fg-2);font:inherit;font-size:12px;cursor:pointer}
+.sm-modal-btn:hover{background:var(--sm-hover);color:var(--sm-fg)}
+.sm-modal-btn[data-primary="1"]{background:var(--sm-brand);color:#fff}
+.sm-modal-btn[data-primary="1"]:hover{filter:brightness(1.08)}
+.sm-modal-btn:disabled{opacity:.5;cursor:default}
 `
 
     function Chevron(props) {
@@ -228,6 +252,10 @@ window.__ModuleLoader__.load({
       return seen
     }
 
+    function isActiveRefusal(reason) {
+      return !!(reason && reason.name === 'WorkspaceArchiveError' && reason.rpcError && reason.rpcError.code === 'workspace/session-active')
+    }
+
     function normalizeTitle(row) {
       if (row && row.blank) return '新会话'
       return (row && (row.displayTitle || row.title)) || (row && row.id) || ''
@@ -238,6 +266,8 @@ window.__ModuleLoader__.load({
       const useWorkspaces = props.useWorkspaces
       const useSectionScroller = props.useSectionScroller
       const open = props.open
+      const archiveSession = props.archiveSession
+      const unarchiveSession = props.unarchiveSession
 
       const list = useSessions(state => state)
       const workspaces = useWorkspaces(state => state.items)
@@ -260,6 +290,9 @@ window.__ModuleLoader__.load({
       const [menu, setMenu] = useState(null)
       const [toast, setToast] = useState(null)
       const [focusedId, setFocusedId] = useState('')
+      const [showArchived, setShowArchived] = useState(false)
+      const [archiveConfirm, setArchiveConfirm] = useState(null)
+      const [archiveBusy, setArchiveBusy] = useState(false)
 
       const dragRef = useRef(null)
       const pointerRef = useRef(null)
@@ -357,8 +390,29 @@ window.__ModuleLoader__.load({
         const edges = (data.edges || []).filter(edge => allById.has(edge.childId) && allById.has(edge.parentId))
         const attached = new Set(edges.map(edge => edge.childId))
         const archived = new Set(archivedSessionIds || [])
-        /* 归档会话与原生侧栏保持一致地隐藏；子代理会话默认隐藏，但被邮箱挂接时必须显示（它就是子行） */
-        const rows = all.filter(row => !archived.has(row.id) && (row.origin !== 'subagent' || attached.has(row.id)))
+        /* 父会话归档时整棵子树一起隐藏；groups.json 不动，取消归档即可原样恢复。 */
+        const allChildrenOf = new Map()
+        for (const edge of edges) {
+          const kids = allChildrenOf.get(edge.parentId) || []
+          kids.push(edge.childId)
+          allChildrenOf.set(edge.parentId, kids)
+        }
+        const hidden = new Set()
+        const hideSubtree = rootId => {
+          const stack = [rootId]
+          while (stack.length) {
+            const id = stack.pop()
+            if (hidden.has(id)) continue
+            hidden.add(id)
+            for (const kid of allChildrenOf.get(id) || []) stack.push(kid)
+          }
+        }
+        for (const id of archived) if (allById.has(id)) hideSubtree(id)
+        /* 子代理会话默认隐藏，但被邮箱挂接时必须显示（它就是子行） */
+        const rows = all.filter(row => !hidden.has(row.id) && (row.origin !== 'subagent' || attached.has(row.id)))
+        const archivedRows = all
+          .filter(row => archived.has(row.id) && (row.origin !== 'subagent' || attached.has(row.id)))
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
         const byId = new Map(rows.map(row => [row.id, row]))
         const parentOf = new Map()
         const orderOf = new Map()
@@ -402,7 +456,7 @@ window.__ModuleLoader__.load({
           if (b.key === '__none__') return 1
           return a.label.localeCompare(b.label, 'zh-Hans-CN')
         })
-        return { rows, byId, parentOf, childrenOf, ordered }
+        return { rows, byId, parentOf, childrenOf, ordered, archivedRows }
       }, [list, data.edges, workspaces, archivedSessionIds])
 
       /* 当前会话：与原生同源判定 —— retainedBy.mainView 的那个 */
@@ -610,6 +664,80 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }, [request, tree.parentOf, load, log])
+
+      const unarchiveNow = useCallback(async id => {
+        if (typeof unarchiveSession !== 'function') {
+          setToast({ text: '当前环境不支持取消归档', error: true })
+          return
+        }
+        setArchiveBusy(true)
+        try {
+          await unarchiveSession(id)
+          setToast({ text: '已取消归档' })
+          load()
+        } catch (cause) {
+          setToast({ text: `取消归档失败：${cause instanceof Error ? cause.message : String(cause)}`, error: true })
+        } finally {
+          setArchiveBusy(false)
+        }
+      }, [unarchiveSession, load])
+
+      const archiveNow = useCallback(async (id, stopActivity) => {
+        if (typeof archiveSession !== 'function') {
+          setToast({ text: '当前环境不支持归档', error: true })
+          return
+        }
+        setArchiveBusy(true)
+        try {
+          await archiveSession(id, stopActivity ? { stopActivity: true } : undefined)
+          setToast({ text: '已归档', undo: () => { void unarchiveNow(id) } })
+          load()
+        } catch (cause) {
+          if (!stopActivity && isActiveRefusal(cause)) {
+            const row = tree.byId.get(id)
+            const kids = tree.childrenOf.get(id) || []
+            const subtree = subtreeIds(tree.childrenOf, id)
+            setArchiveConfirm({
+              id,
+              title: row ? normalizeTitle(row) : id,
+              running: true,
+              stopActivity: true,
+              childCount: kids.length,
+              activeChildren: [...subtree].filter(childId => childId !== id && tree.byId.get(childId)?.running).length,
+            })
+          } else {
+            setToast({ text: `归档失败：${cause instanceof Error ? cause.message : String(cause)}`, error: true })
+          }
+        } finally {
+          setArchiveBusy(false)
+        }
+      }, [archiveSession, tree.byId, tree.childrenOf, unarchiveNow, load])
+
+      const requestArchive = useCallback(row => {
+        if (!row) return
+        const kids = tree.childrenOf.get(row.id) || []
+        const subtree = subtreeIds(tree.childrenOf, row.id)
+        const activeChildren = [...subtree].filter(childId => childId !== row.id && tree.byId.get(childId)?.running).length
+        if (row.running || kids.length > 0) {
+          setArchiveConfirm({
+            id: row.id,
+            title: normalizeTitle(row),
+            running: !!row.running,
+            stopActivity: !!row.running,
+            childCount: kids.length,
+            activeChildren,
+          })
+        } else {
+          void archiveNow(row.id, false)
+        }
+      }, [tree.childrenOf, tree.byId, archiveNow])
+
+      const confirmArchive = useCallback(() => {
+        const target = archiveConfirm
+        if (!target) return
+        setArchiveConfirm(null)
+        void archiveNow(target.id, target.stopActivity)
+      }, [archiveConfirm, archiveNow])
 
       const onDropRow = useCallback((event, targetId) => {
         event.preventDefault()
@@ -859,6 +987,18 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener('keydown', onDocKey, true)
       }, [menu, focusSid])
 
+      useEffect(() => {
+        if (!archiveConfirm) return
+        const onDocKey = event => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          setArchiveConfirm(null)
+        }
+        document.addEventListener('keydown', onDocKey, true)
+        return () => document.removeEventListener('keydown', onDocKey, true)
+      }, [archiveConfirm])
+
       const moveBy = useCallback((delta, anchor) => {
         if (!flat.length) return
         const from = anchor && orderIndex.has(anchor) ? anchor : focusedId
@@ -1106,6 +1246,60 @@ window.__ModuleLoader__.load({
         h('span', { className: 'sm-prog', 'aria-hidden': 'true' }, h('i')),
       ) : null
 
+      const archivedSection = !search && showArchived && tree.archivedRows.length
+        ? h('div', { className: 'sm-archived', key: 'archived' },
+            h('div', { className: 'sm-arch-head' },
+              h('span', null, '已归档'),
+              h('span', { className: 'sm-gcount' }, String(tree.archivedRows.length)),
+            ),
+            tree.archivedRows.map(row => h('div', {
+              key: 'archived:' + row.id,
+              className: 'sm-arch-row',
+              title: normalizeTitle(row),
+            },
+              h('span', { className: 'sm-title' }, normalizeTitle(row)),
+              h('button', {
+                className: 'sm-arch-restore',
+                disabled: archiveBusy,
+                onClick: () => { void unarchiveNow(row.id) },
+              }, '恢复'),
+            )),
+          )
+        : null
+
+      const archiveConfirmNode = archiveConfirm ? h('div', {
+        className: 'sm-modal-bd',
+        onMouseDown: event => { if (event.target === event.currentTarget) setArchiveConfirm(null) },
+      },
+        h('div', {
+          className: 'sm-modal',
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-label': '归档会话',
+        },
+          h('div', { className: 'sm-modal-title' }, '归档会话？'),
+          h('div', { className: 'sm-modal-text' },
+            `「${archiveConfirm.title}」`,
+            archiveConfirm.running ? '\n该会话正在运行，归档会停止当前工作。' : '',
+            archiveConfirm.childCount
+              ? `\n它还有 ${archiveConfirm.childCount} 个子会话；归档后整棵子树会一起隐藏，取消归档时原样恢复。`
+              : '',
+            archiveConfirm.activeChildren
+              ? `\n其中 ${archiveConfirm.activeChildren} 个子会话正在运行，归档父会话不会停止它们。`
+              : '',
+          ),
+          h('div', { className: 'sm-modal-actions' },
+            h('button', { className: 'sm-modal-btn', onClick: () => setArchiveConfirm(null) }, '取消'),
+            h('button', {
+              className: 'sm-modal-btn',
+              'data-primary': '1',
+              disabled: archiveBusy,
+              onClick: confirmArchive,
+            }, archiveConfirm.stopActivity ? '停止并归档' : '归档'),
+          ),
+        ),
+      ) : null
+
       const menuNode = menu ? [
         h('div', { key: 'bd', className: 'sm-backdrop', onMouseDown: () => setMenu(null) }),
         h('div', {
@@ -1145,6 +1339,17 @@ window.__ModuleLoader__.load({
                 h('button', { key: 'open', className: 'sm-menu-item', role: 'menuitem', onClick: () => { setMenu(null); open(menu.id) } }, '打开会话'),
                 h('button', { key: 'attach', className: 'sm-menu-item', role: 'menuitem', onClick: () => setMenu(previous => previous ? { ...previous, mode: 'attach' } : previous) }, '挂到父会话…'),
                 h('button', { key: 'copy', className: 'sm-menu-item', role: 'menuitem', onClick: () => copyId(menu.id) }, '复制会话 ID'),
+                h('button', {
+                  key: 'archive',
+                  className: 'sm-menu-item',
+                  role: 'menuitem',
+                  disabled: archiveBusy,
+                  onClick: () => {
+                    const row = tree.byId.get(menu.id)
+                    setMenu(null)
+                    requestArchive(row)
+                  },
+                }, '归档会话'),
                 tree.parentOf.has(menu.id)
                   ? h('button', {
                       key: 'detach',
@@ -1160,7 +1365,7 @@ window.__ModuleLoader__.load({
 
       const searchItems = renderSearch()
 
-      return h('div', { className: 'sm-root', 'data-busy': busy ? '1' : undefined },
+      return h('div', { className: 'sm-root', 'data-busy': (busy || archiveBusy) ? '1' : undefined },
         h('div', { className: 'sm-toolbar' },
           searchOpen
             ? h('div', { className: 'sm-searchbar' },
@@ -1185,6 +1390,16 @@ window.__ModuleLoader__.load({
             : h('span', { className: 'sm-toolbar-label' }, '会话'),
           h('div', { className: 'sm-acts' },
             h('span', { className: 'sm-ver', title: 'session-mailbox ' + CLIENT_VERSION }, CLIENT_VERSION),
+            tree.archivedRows.length
+              ? h('button', {
+                  className: 'sm-icon sm-arch-toggle',
+                  title: showArchived ? '隐藏已归档' : `已归档 ${tree.archivedRows.length}`,
+                  'aria-label': showArchived ? '隐藏已归档' : `查看已归档 ${tree.archivedRows.length}`,
+                  'aria-pressed': showArchived ? 'true' : 'false',
+                  'data-on': showArchived ? '1' : undefined,
+                  onClick: () => setShowArchived(value => !value),
+                }, '已归档 ', h('span', { className: 'sm-arch-n' }, String(tree.archivedRows.length)))
+              : null,
             !searchOpen ? h('button', { className: 'sm-icon', title: '搜索', 'aria-label': '搜索', onClick: () => setSearchOpen(true) }, h(SearchIcon)) : null,
             !searchOpen ? h('button', { className: 'sm-icon', title: '刷新', 'aria-label': '刷新', onClick: load }, h(RefreshIcon)) : null,
           ),
@@ -1201,14 +1416,19 @@ window.__ModuleLoader__.load({
           loading && tree.rows.length === 0
             ? h('div', { className: 'sm-skeleton' }, [0, 1, 2, 3].map(index => h('i', { key: index })))
             : null,
-          !loading && tree.rows.length === 0
-            ? h('div', { className: 'sm-empty' }, h('b', null, '还没有会话'), h('span', { className: 'sm-mini' }, '新建会话后会显示在这里'))
+          !loading && tree.rows.length === 0 && !(showArchived && tree.archivedRows.length)
+            ? h('div', { className: 'sm-empty' },
+                h('b', null, tree.archivedRows.length ? '没有活跃会话' : '还没有会话'),
+                tree.archivedRows.length
+                  ? h('button', { onClick: () => setShowArchived(true) }, `查看已归档 ${tree.archivedRows.length}`)
+                  : h('span', { className: 'sm-mini' }, '新建会话后会显示在这里'),
+              )
             : null,
-          tree.rows.length
+          (tree.rows.length || (showArchived && tree.archivedRows.length))
             ? h('div', { className: 'sm-tree', role: 'tree', 'aria-label': '会话列表', 'aria-multiselectable': undefined },
                 search
                   ? searchItems
-                  : tree.ordered.map(group => groupNode(group)),
+                  : [...tree.ordered.map(group => groupNode(group)), archivedSection],
               )
             : null,
           dragId ? h('div', {
@@ -1218,6 +1438,7 @@ window.__ModuleLoader__.load({
         ),
         toastNode,
         menuNode,
+        archiveConfirmNode,
       )
     }
 
@@ -1237,7 +1458,11 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({
         name: 'sidebar.workspaces',
         priority: -100,
-        inject: () => ({ open: id => ctx.uiWorkspace.openSession(id) }),
+        inject: () => ({
+          open: id => ctx.uiWorkspace.openSession(id),
+          archiveSession: (id, options) => ctx.uiWorkspace.archiveSession(id, options),
+          unarchiveSession: id => ctx.uiWorkspace.unarchiveSession(id),
+        }),
       }, SessionBrowser))
     }
 

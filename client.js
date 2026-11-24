@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
     }
 
     const API = '/session-mailbox'
-    const CLIENT_VERSION = '0.3.18'
+    const CLIENT_VERSION = '0.3.16'
     const NO_FOLDER = '无文件夹'
 
     /* ---------------------------------------------------------------------
@@ -56,14 +56,6 @@ window.__ModuleLoader__.load({
 .sm-node:focus-visible>.sm-row{background:var(--sm-hover);box-shadow:inset 0 0 0 2px var(--sm-brand)}
 .sm-group:focus-visible>.sm-gbody{background:var(--sm-hover);box-shadow:inset 0 0 0 2px var(--sm-brand)}
 .sm-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
-
-/* 新建会话：侧栏最高优先级操作 */
-.sm-newbar{flex:none;padding:2px 12px 6px}
-.sm-new{display:flex;align-items:center;gap:7px;width:100%;height:32px;padding:0 10px;border:0;border-radius:7px;background:var(--sm-brand-bg);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sm-brand) 24%,transparent);color:var(--sm-brand);font:inherit;font-size:12.5px;font-weight:600;letter-spacing:.01em;cursor:pointer;transition:background .12s,box-shadow .12s}
-.sm-new svg{flex:none;width:14px;height:14px}
-.sm-new:hover{background:color-mix(in srgb,var(--sm-brand) 17%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sm-brand) 40%,transparent)}
-.sm-new:active{background:color-mix(in srgb,var(--sm-brand) 22%,transparent)}
-.sm-new:focus-visible{box-shadow:inset 0 0 0 2px var(--sm-brand)}
 
 /* 工具条 32px（brief 约束） */
 .sm-toolbar{flex:none;display:flex;align-items:center;height:32px;padding:0 12px;color:var(--sm-fg-3)}
@@ -217,11 +209,6 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M4 4l8 8M12 4l-8 8' }))
     }
 
-    function PlusIcon() {
-      return h('svg', { viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', 'aria-hidden': 'true' },
-        h('path', { d: 'M8 3.5v9M3.5 8h9' }))
-    }
-
     function basename(path) {
       if (!path) return NO_FOLDER
       const parts = String(path).split(/[\\/]+/).filter(Boolean)
@@ -242,7 +229,6 @@ window.__ModuleLoader__.load({
     }
 
     function normalizeTitle(row) {
-      if (row && row.blank) return row.displayTitle || row.title || '新会话'
       return (row && (row.displayTitle || row.title)) || (row && row.id) || ''
     }
 
@@ -251,7 +237,6 @@ window.__ModuleLoader__.load({
       const useWorkspaces = props.useWorkspaces
       const useSectionScroller = props.useSectionScroller
       const open = props.open
-      const startSession = props.startSession
 
       const list = useSessions(state => state)
       const workspaces = useWorkspaces(state => state.items)
@@ -366,7 +351,7 @@ window.__ModuleLoader__.load({
       const tree = useMemo(() => {
         const source = list && list.byId ? list.byId : {}
         const ids = list && Array.isArray(list.ids) ? list.ids : []
-        const all = ids.map(id => source[id]).filter(row => row)
+        const all = ids.map(id => source[id]).filter(row => row && !row.blank)
         const allById = new Map(all.map(row => [row.id, row]))
         const edges = (data.edges || []).filter(edge => allById.has(edge.childId) && allById.has(edge.parentId))
         const attached = new Set(edges.map(edge => edge.childId))
@@ -399,10 +384,7 @@ window.__ModuleLoader__.load({
         const workspaceTitles = new Map()
         for (const item of workspaces || []) if (item && item.path) workspaceTitles.set(item.path, item.title)
         const groups = new Map()
-        const roots = rows.filter(row => !parentOf.has(row.id)).sort((a, b) => {
-          const blank = Number(Boolean(b.blank)) - Number(Boolean(a.blank))
-          return blank || (b.updatedAt || 0) - (a.updatedAt || 0)
-        })
+        const roots = rows.filter(row => !parentOf.has(row.id)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
         for (const row of roots) {
           const cwd = row.cwd || ''
           const key = cwd || '__none__'
@@ -414,13 +396,7 @@ window.__ModuleLoader__.load({
           }
           group.roots.push(row.id)
         }
-        const hasBlank = group => group.roots.some(id => {
-          const row = byId.get(id)
-          return Boolean(row && row.blank)
-        })
         const ordered = [...groups.values()].sort((a, b) => {
-          const blank = Number(hasBlank(b)) - Number(hasBlank(a))
-          if (blank) return blank
           if (a.key === '__none__') return -1
           if (b.key === '__none__') return 1
           return a.label.localeCompare(b.label, 'zh-Hans-CN')
@@ -1184,15 +1160,6 @@ window.__ModuleLoader__.load({
       const searchItems = renderSearch()
 
       return h('div', { className: 'sm-root', 'data-busy': busy ? '1' : undefined },
-        h('div', { className: 'sm-newbar' },
-          h('button', {
-            className: 'sm-new',
-            type: 'button',
-            title: '新建会话',
-            'aria-label': '新建会话',
-            onClick: () => { if (typeof startSession === 'function') startSession() },
-          }, h(PlusIcon), h('span', null, '新建会话')),
-        ),
         h('div', { className: 'sm-toolbar' },
           searchOpen
             ? h('div', { className: 'sm-searchbar' },
@@ -1269,10 +1236,7 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({
         name: 'sidebar.workspaces',
         priority: -100,
-        inject: () => ({
-          open: id => ctx.uiWorkspace.openSession(id),
-          startSession: (workspaceId, options) => ctx.uiWorkspace.startSession(workspaceId, options),
-        }),
+        inject: () => ({ open: id => ctx.uiWorkspace.openSession(id) }),
       }, SessionBrowser))
     }
 

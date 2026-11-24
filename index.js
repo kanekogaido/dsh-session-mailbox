@@ -494,11 +494,10 @@ export function apply(ctx) {
   })
 
   ctx.tools.register({
-    name: 'create_session',
+    name: 'create_child_session',
     description:
-      'Create a new top-level DSH session and send it a first prompt. This is the default when the user asks '
-      + 'for a new session (新建会话/新会话), and the new session must NOT be attached under the current session. '
-      + 'Only use create_subagent_session when the user explicitly asks for a child agent (创建子 agent/子代理/子对话).',
+      'Create a brand-new DSH session, attach it under the calling session, and send it a first prompt. '
+      + 'Use this when the user asks to open a new child session for an independent task.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -510,60 +509,6 @@ export function apply(ctx) {
         cwd: {
           type: 'string',
           description: 'Directory for the new session. Omit to use the current Host working directory.',
-        },
-      },
-      required: ['prompt'],
-    },
-    output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          sessionId: { type: 'string' },
-          parentId: { type: 'string' },
-        },
-        required: ['sessionId', 'parentId'],
-      },
-      render: (_args, value) => [{
-        type: 'text',
-        text: `created top-level session ${value.sessionId}`,
-      }],
-    },
-    async execute(args, exec) {
-      const promptText = readText(args, 'prompt')
-      const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : process.cwd()
-      const created = await ctx.sessionController.create({ cwd })
-      const sessionId = created && created.sessionId
-      if (!sessionId) throw new Error('session/create returned no session id')
-      audit({ action: 'create-session', sessionId, actor: 'tool', cwd })
-      await ctx.sessionController.prompt({
-        requestId: randomUUID(),
-        sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: promptText }],
-      }, exec.signal)
-      return { sessionId, parentId: '' }
-    },
-  })
-
-  ctx.tools.register({
-    name: 'create_subagent_session',
-    description:
-      'Create a child DSH session under the calling session and send it a first prompt. '
-      + 'Use ONLY when the user explicitly says “创建子 agent”, “子代理”, “子对话”, or otherwise explicitly asks '
-      + 'for a child agent/conversation. Never use this for an ordinary new-session request; use create_session '
-      + 'for those, so the new session stays top-level.',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        prompt: {
-          type: 'string',
-          description: 'First message the child session should process.',
-        },
-        cwd: {
-          type: 'string',
-          description: 'Directory for the child session. Omit to use the current Host working directory.',
         },
       },
       required: ['prompt'],

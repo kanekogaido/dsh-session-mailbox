@@ -31,9 +31,6 @@ own direct children), and a leader can see and change the tree.
 - Native-sidebar session tree: parent/child rows with expand/collapse, sibling reordering by drag,
   re-parenting by dropping on another session, and detach by dropping on the bottom strip.
 - Archived sessions are hidden from the tree, matching the native workspace browser.
-- A primary **New session** action at the top of the sidebar. It uses the native start-session flow,
-  so an ordinary new session stays top-level and its blank row is shown first; only an explicit
-  subagent request creates a child conversation.
 
 ## Native sidebar
 
@@ -57,8 +54,6 @@ archived parent disappears instead of being shown twice.
 | Tool | Parameters | What it does |
 | --- | --- | --- |
 | `get_current_session` | none | Returns `sessionId` and `parentId` (empty when top-level). |
-| `create_session` | `prompt`, `cwd?` | Creates a new **top-level** session and sends it `prompt`; never attaches it to the caller. |
-| `create_subagent_session` | `prompt`, `cwd?` | Creates a child session under the caller and sends it `prompt`. Use only for an explicit “create subagent/child” request. |
 | `send_session_message` | `to`, `message` | Delivers `message` to session `to`, subject to the link ACL. |
 | `attach_session` | `child`, `parent` | Puts `child` under `parent`, replacing an existing parent; rejects self-links and cycles. |
 | `detach_session` | `child` | Removes `child` from its parent, making it top-level again. |

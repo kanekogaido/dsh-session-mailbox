@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
     }
 
     const API = '/session-mailbox'
-    const CLIENT_VERSION = '0.3.19'
+    const CLIENT_VERSION = '0.3.20'
     const NO_FOLDER = '无文件夹'
 
     /* ---------------------------------------------------------------------
@@ -229,6 +229,7 @@ window.__ModuleLoader__.load({
     }
 
     function normalizeTitle(row) {
+      if (row && row.blank) return '新会话'
       return (row && (row.displayTitle || row.title)) || (row && row.id) || ''
     }
 
@@ -351,7 +352,7 @@ window.__ModuleLoader__.load({
       const tree = useMemo(() => {
         const source = list && list.byId ? list.byId : {}
         const ids = list && Array.isArray(list.ids) ? list.ids : []
-        const all = ids.map(id => source[id]).filter(row => row && !row.blank)
+        const all = ids.map(id => source[id]).filter(Boolean)
         const allById = new Map(all.map(row => [row.id, row]))
         const edges = (data.edges || []).filter(edge => allById.has(edge.childId) && allById.has(edge.parentId))
         const attached = new Set(edges.map(edge => edge.childId))

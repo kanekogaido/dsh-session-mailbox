@@ -7,6 +7,10 @@ parent and kept in a persisted tree.
 ## What it adds
 
 - `get_current_session()` — returns this session's id and parent id.
+- `create_session({ prompt, cwd? })` — create a **top-level** session and send it a first prompt; it is
+  never attached to the caller. This is the default for an ordinary “new session” request.
+- `create_subagent_session({ prompt, cwd? })` — create a child session under the caller and send it a
+  first prompt. Use only for an explicit “create subagent/child conversation” request.
 - `send_session_message({ to, message })` — deliver a message to another session. The receiver gets
   a user-role message wrapped in a `<session-message from-session="…" from-parent="…" hop-chain="…">`
   envelope, followed by a note saying it came from another session rather than from the user.
@@ -20,11 +24,13 @@ parent and kept in a persisted tree.
 
 The Client module replaces the `sidebar.workspaces` slot with a session browser that draws the
 persisted links as a tree inside the normal DSH sidebar. It keeps workspace grouping, search,
-running badges and session opening, and adds expand/collapse, sibling drag reordering, dropping a
-child on another session to re-parent it, dropping it on the bottom strip to detach, and hiding
-archived sessions (the same `archivedSessionIds` state the native browser uses). Because one slot is
+running badges and session opening, and adds a primary **New session** button at the very top
+(calling the native `uiWorkspace.startSession()`), expand/collapse, sibling drag reordering,
+dropping a child on another session to re-parent it, dropping it on the bottom strip to detach, and
+hiding archived sessions (the same `archivedSessionIds` state the native browser uses). Because one slot is
 replaced, native workspace-browser actions such as pin, archive, fork and workspace create/rename
-are not rendered by this sidebar.
+are not rendered by this sidebar. Blank sessions are not filtered out; they are titled “新会话” and
+their workspace group is sorted first, so a freshly created session is immediately visible.
 
 ## Link model
 

@@ -29,6 +29,8 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 - 原生侧栏会话树：父子行、展开/收起，拖动子会话调整兄弟顺序，拖到别的会话行改挂，拖到底部
   投放条移出父会话。
 - 与原生一致地隐藏已归档会话。
+- 侧栏顶部提供主操作「新建会话」：走原生新建流程，普通新会话保持顶层并优先显示空白行；
+  只有明确要求创建子 agent 时才创建子对话。
 
 ## 原生侧栏
 
@@ -50,6 +52,8 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 | 工具 | 参数 | 作用 |
 | --- | --- | --- |
 | `get_current_session` | 无 | 返回 `sessionId` 与 `parentId`（顶层为空串）。 |
+| `create_session` | `prompt`、`cwd?` | 创建**顶层**新会话并发送 `prompt`，不会挂到当前会话下。 |
+| `create_subagent_session` | `prompt`、`cwd?` | 在当前会话下创建子会话并发送 `prompt`；仅在明确要求创建子 agent/子对话时使用。 |
 | `send_session_message` | `to`、`message` | 把 `message` 投递到会话 `to`，受链接 ACL 约束。 |
 | `attach_session` | `child`、`parent` | 把 `child` 挂到 `parent` 下，替换旧父会话；拒绝自链和环。 |
 | `detach_session` | `child` | 把 `child` 从父会话摘除，恢复为顶层。 |

@@ -81,6 +81,13 @@ available for the user. For a direct child the Host records a pending task, list
 any final text. If the child sends a manual `send_session_message` to its parent first, the pending
 task is marked manual and the automatic copy is skipped.
 
+Delivery uses the native `agent-message` source (`{ kind: 'agent-message', form: 'relay',
+senderSessionId }`) through `ctx.agents.get(parentId).followup(...)`. The Chat client classifies this
+as a non-user turn trigger, so it renders as a collapsed **Agent** row and expands on demand; it does
+not replace or alter the normal `user` message renderer. The same source is used for a child's manual
+`send_session_message` to its parent. If the parent agent is not live, the Host falls back to the
+ordinary session-controller prompt.
+
 The task instruction appended to a dispatched prompt tells the child to work independently, avoid
 progress messages, and finish with one final result. The parent should not sleep, poll, or watch
 files while the child works.

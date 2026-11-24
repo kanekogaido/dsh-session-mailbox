@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export const name = 'session-mailbox'
-export const inject = ['tools', 'sessionController']
+export const inject = ['tools', 'sessionController', 'agents']
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,200}$/
 
@@ -267,9 +267,6 @@ function autoReportEnvelope(childId, parentId, text) {
     `<session-message from-session="${childId}" from-parent="${parentId}" auto-report="true">`,
     body,
     '</session-message>',
-    '',
-    `This is the final result automatically reported by child session "${childId}".`,
-    'The child has finished its turn. Continue with the user, or send another task if needed.',
   ].join('\n')
 }
 
@@ -332,6 +329,27 @@ export function apply(ctx) {
     pendingReports.set(childId, { parentId, requestId, at: Date.now(), manual: false })
   }
 
+  const deliverAsAgentMessage = (targetId, senderId, text) => {
+    const target = typeof ctx.agents?.get === 'function' ? ctx.agents.get(targetId) : undefined
+    if (!target || typeof target.followup !== 'function') return false
+    try {
+      target.followup({
+        id: randomUUID(),
+        role: 'user',
+        content: [{ type: 'text', text }],
+        source: {
+          kind: 'agent-message',
+          form: 'relay',
+          senderSessionId: senderId,
+        },
+      })
+      return true
+    } catch (error) {
+      audit({ action: 'collapsed-delivery-error', targetId, senderId, error: String(error) })
+      return false
+    }
+  }
+
   const deliverChildReport = (task, childId, text) => {
     const body = autoReportEnvelope(childId, task.parentId, text)
     audit({
@@ -341,6 +359,7 @@ export function apply(ctx) {
       requestId: task.requestId,
       chars: text.length,
     })
+    if (deliverAsAgentMessage(task.parentId, childId, body)) return
     try {
       const work = ctx.sessionController.prompt({
         requestId: randomUUID(),
@@ -994,6 +1013,11 @@ export function apply(ctx) {
       if (isChildTask) queueChildTask(targetId, senderId, requestId)
       const body = envelope(senderId, message, parentId, isChildTask)
         + (isChildTask ? `\n${taskProtocol(senderId)}` : '')
+
+      if (parentId && targetId === parentId && deliverAsAgentMessage(targetId, senderId, body)) {
+        audit({ action: 'message-delivered-collapsed', targetId, senderId, chars: message.length })
+        return { delivered: true, sessionId: targetId }
+      }
 
       try {
         const work = ctx.sessionController.prompt({

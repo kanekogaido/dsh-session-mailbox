@@ -41,6 +41,9 @@ own direct children), and a leader can see and change the tree.
 - Independent child work: dispatching to a child returns immediately; the parent stays available for
   normal conversation. When the child turn ends, the Host automatically forwards its final text to the
   parent as a `session-message` with `auto-report="true"`; the parent does not poll or wait.
+  Auto-reports and manual child-to-parent messages use the native `agent-message` source, so Chat
+  shows them as a collapsed **Agent** turn-trigger row instead of a user bubble; expanding the row
+  reveals the full report. Normal user messages are untouched.
 - Coordinator-first main session: unless the user explicitly says the main session itself should
   operate or modify, production work goes through `dispatch_task`. It reuses a direct child whose
   stored role, title, or recent task matches, and creates a new child under the main session when

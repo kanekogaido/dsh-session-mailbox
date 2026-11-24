@@ -261,6 +261,24 @@ export function apply(ctx) {
   }
 
   if (typeof ctx.inject === 'function') {
+    ctx.inject(['systemPrompt'], (scope) => {
+      if (!scope.systemPrompt || typeof scope.systemPrompt.section !== 'function') return
+      scope.systemPrompt.section({
+        name: 'session-mailbox:new-session-policy',
+        order: 1500,
+        text:
+          'Session-mailbox policy for this profile: when the user asks to open, start, or create a new session '
+          + '(for example “新建一个会话”, “开个新会话”, “再来一个会话”, or similar) without explicitly asking for a '
+          + 'top-level new session, treat it as a request to create a child session under the current session and call '
+          + 'the `create_child_session` tool. Do not create a top-level session for that request and do not tell the '
+          + 'user to click a New Session button. Only when the user explicitly says “创建子 agent”, “子代理”, or '
+          + '“创建子对话” may you use the native subagent tool; an ordinary new-session request must use '
+          + '`create_child_session`. If the user explicitly asks for a top-level session, respect that exception.',
+      })
+    })
+  }
+
+  if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer', 'connection'], (scope) => {
       const guarded = (handler) => async (request, response) => {
         try {
@@ -496,22 +514,23 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'create_child_session',
     description:
-      'Create a brand-new DSH session, attach it under the calling session, and send it a first prompt. '
-      + 'Use this when the user asks to open a new child session for an independent task.',
+      'Create a new DSH session, attach it under the calling session, and optionally send a first prompt. '
+      + 'This is the default action for an ordinary “新建会话/开个新会话/再来一个会话” request: the new session '
+      + 'must appear under the current session in the mailbox sidebar, not as a top-level session. '
+      + 'Use the native subagent tool instead only when the user explicitly asks for a child agent/子代理/子对话.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         prompt: {
           type: 'string',
-          description: 'First message the new session should process.',
+          description: 'Optional first message for the new session. Omit to create an idle child session.',
         },
         cwd: {
           type: 'string',
           description: 'Directory for the new session. Omit to use the current Host working directory.',
         },
       },
-      required: ['prompt'],
     },
     output: {
       schema: {
@@ -530,7 +549,7 @@ export function apply(ctx) {
     },
     async execute(args, exec) {
       const parentId = callerId(exec)
-      const promptText = readText(args, 'prompt')
+      const promptText = typeof args.prompt === 'string' ? args.prompt.trim() : ''
       const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : process.cwd()
       const created = await ctx.sessionController.create({ cwd })
       const sessionId = created && created.sessionId
@@ -538,12 +557,14 @@ export function apply(ctx) {
       const currentGroups = loadGroups()
       link(currentGroups, sessionId, parentId)
       audit({ action: 'create-child', childId: sessionId, parentId, actor: 'tool', cwd })
-      await ctx.sessionController.prompt({
-        requestId: randomUUID(),
-        sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: promptText }],
-      }, exec.signal)
+      if (promptText) {
+        await ctx.sessionController.prompt({
+          requestId: randomUUID(),
+          sessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text: promptText }],
+        }, exec.signal)
+      }
       return { sessionId, parentId }
     },
   })

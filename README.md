@@ -31,6 +31,10 @@ own direct children), and a leader can see and change the tree.
 - Native-sidebar session tree: parent/child rows with expand/collapse, sibling reordering by drag,
   re-parenting by dropping on another session, and detach by dropping on the bottom strip.
 - Archived sessions are hidden from the tree, matching the native workspace browser.
+- New-session intent: an ordinary “新建一个会话 / 开个新会话 / 再来一个会话” request is handled by the
+  assistant through `create_child_session`, creating a child under the current session in this tree.
+  Only an explicit “创建子 agent / 子代理” request uses a native subagent; there is no extra
+  “New session” button in the sidebar.
 
 ## Native sidebar
 
@@ -47,13 +51,15 @@ search, running badge and session-open behavior, and adds:
 Because this one slot is replaced, native actions that live in the workspace browser itself (pin,
 archive, fork, create/rename workspace) are not rendered by this sidebar. Use the session header's
 native menu or the normal DSH UI for those actions. The tree still reads `archivedSessionIds`, so an
-archived parent disappears instead of being shown twice.
+archived parent disappears instead of being shown twice. The plugin does **not** add a New Session
+button to this sidebar; the new-session behavior is the assistant tool policy described above.
 
 ## Tools
 
 | Tool | Parameters | What it does |
 | --- | --- | --- |
 | `get_current_session` | none | Returns `sessionId` and `parentId` (empty when top-level). |
+| `create_child_session` | `prompt?`, `cwd?` | Creates a child session under the caller. This is the default for an ordinary new-session request; omit `prompt` to leave it idle. |
 | `send_session_message` | `to`, `message` | Delivers `message` to session `to`, subject to the link ACL. |
 | `attach_session` | `child`, `parent` | Puts `child` under `parent`, replacing an existing parent; rejects self-links and cycles. |
 | `detach_session` | `child` | Removes `child` from its parent, making it top-level again. |

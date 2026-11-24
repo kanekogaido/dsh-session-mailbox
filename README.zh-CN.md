@@ -29,6 +29,9 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 - 原生侧栏会话树：父子行、展开/收起，拖动子会话调整兄弟顺序，拖到别的会话行改挂，拖到底部
   投放条移出父会话。
 - 与原生一致地隐藏已归档会话。
+- 新建会话意图：普通「新建一个会话 / 开个新会话 / 再来一个会话」由助手通过
+  `create_child_session` 处理，在当前会话下创建子会话；只有明确说「创建子 agent / 子代理」才使用
+  原生 subagent。侧栏不额外放「新建会话」按钮。
 
 ## 原生侧栏
 
@@ -43,13 +46,15 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 
 因为替换的是这一个 slot，原生工作区浏览器里的 pin、归档、fork、新建/重命名工作区等操作
 **不会**出现在这个侧栏里，需要使用会话头部菜单或 DSH 原生 UI。树仍会读取
-`archivedSessionIds`，所以归档的父会话会消失，而不是显示成两行。
+`archivedSessionIds`，所以归档的父会话会消失，而不是显示成两行。插件**不会**在这个侧栏加
+「新建会话」按钮；新建行为是上面说的助手工具策略。
 
 ## 工具
 
 | 工具 | 参数 | 作用 |
 | --- | --- | --- |
 | `get_current_session` | 无 | 返回 `sessionId` 与 `parentId`（顶层为空串）。 |
+| `create_child_session` | `prompt?`、`cwd?` | 在当前会话下创建子会话；普通「新建会话」的默认动作，省略 `prompt` 则创建空闲子会话。 |
 | `send_session_message` | `to`、`message` | 把 `message` 投递到会话 `to`，受链接 ACL 约束。 |
 | `attach_session` | `child`、`parent` | 把 `child` 挂到 `parent` 下，替换旧父会话；拒绝自链和环。 |
 | `detach_session` | `child` | 把 `child` 从父会话摘除，恢复为顶层。 |

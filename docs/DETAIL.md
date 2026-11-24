@@ -7,6 +7,9 @@ parent and kept in a persisted tree.
 ## What it adds
 
 - `get_current_session()` — returns this session's id and parent id.
+- `create_child_session({ prompt?, cwd? })` — create a session under the caller in the persisted tree
+  and optionally send a first prompt. A prompt section makes this the default action for an ordinary
+  “新建会话” request; only an explicit “创建子 agent/子代理” request should use a native subagent.
 - `send_session_message({ to, message })` — deliver a message to another session. The receiver gets
   a user-role message wrapped in a `<session-message from-session="…" from-parent="…" hop-chain="…">`
   envelope, followed by a note saying it came from another session rather than from the user.
@@ -24,7 +27,9 @@ running badges and session opening, and adds expand/collapse, sibling drag reord
 child on another session to re-parent it, dropping it on the bottom strip to detach, and hiding
 archived sessions (the same `archivedSessionIds` state the native browser uses). Because one slot is
 replaced, native workspace-browser actions such as pin, archive, fork and workspace create/rename
-are not rendered by this sidebar.
+are not rendered by this sidebar. The plugin also does not add a “New session” button; instead, the
+Host registers a `session-mailbox:new-session-policy` system-prompt section that maps ordinary
+new-session requests to `create_child_session` under the current session.
 
 ## Link model
 

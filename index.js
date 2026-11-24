@@ -394,11 +394,23 @@ export function apply(ctx) {
     savePendingReports(pendingReports)
   }
 
-  const deliverAsAgentMessage = (targetId, senderId, text) => {
-    const target = typeof ctx.agents?.get === 'function' ? ctx.agents.get(targetId) : undefined
-    if (!target || typeof target.followup !== 'function') return false
+  const deliverAsAgentMessage = async (targetId, senderId, text) => {
+    if (typeof ctx.sessionController?.resolveAgent !== 'function') return false
     try {
-      target.followup({
+      const resolved = await ctx.sessionController.resolveAgent(targetId)
+      if (!resolved || !resolved.agent || typeof resolved.agent.followup !== 'function') {
+        if (resolved && resolved.error) {
+          audit({
+            action: 'collapsed-delivery-resolve-error',
+            targetId,
+            senderId,
+            code: resolved.error.code,
+            error: resolved.error.message,
+          })
+        }
+        return false
+      }
+      await Promise.resolve(resolved.agent.followup({
         id: randomUUID(),
         role: 'user',
         content: [{ type: 'text', text }],
@@ -407,7 +419,8 @@ export function apply(ctx) {
           form: 'relay',
           senderSessionId: senderId,
         },
-      })
+      }))
+      audit({ action: 'collapsed-delivery', targetId, senderId, chars: text.length })
       return true
     } catch (error) {
       audit({ action: 'collapsed-delivery-error', targetId, senderId, error: String(error) })
@@ -415,7 +428,7 @@ export function apply(ctx) {
     }
   }
 
-  const deliverChildReport = (task, childId, text) => {
+  const deliverChildReport = async (task, childId, text) => {
     const body = autoReportEnvelope(childId, task.parentId, text)
     audit({
       action: 'auto-report',
@@ -424,7 +437,7 @@ export function apply(ctx) {
       requestId: task.requestId,
       chars: text.length,
     })
-    if (deliverAsAgentMessage(task.parentId, childId, body)) return true
+    if (await deliverAsAgentMessage(task.parentId, childId, body)) return true
     try {
       const work = ctx.sessionController.prompt({
         requestId: randomUUID(),
@@ -443,7 +456,7 @@ export function apply(ctx) {
   }
 
   if (typeof ctx.on === 'function') {
-    ctx.on('session/event', (session, event) => {
+    ctx.on('session/event', async (session, event) => {
       try {
         if (!session || !event) return
         if (event.type === 'assistant/message') {
@@ -474,7 +487,7 @@ export function apply(ctx) {
         const failure = reason && reason.kind !== 'completed'
           ? `Child task ended with ${reason.kind}.`
           : ''
-        const delivered = deliverChildReport(
+        const delivered = await deliverChildReport(
           task,
           session.id,
           [text, failure].filter(Boolean).join('\n\n') || '(child session finished without a text result)',
@@ -489,13 +502,13 @@ export function apply(ctx) {
     })
   }
 
-  const recoverPendingReports = () => {
+  const recoverPendingReports = async () => {
     for (const [childId, task] of [...pendingReports]) {
       try {
         const agent = typeof ctx.agents?.get === 'function' ? ctx.agents.get(childId) : undefined
         if (agent) continue
         if (!task.text) continue
-        if (deliverChildReport(task, childId, task.text)) {
+        if (await deliverChildReport(task, childId, task.text)) {
           pendingReports.delete(childId)
           savePendingReports(pendingReports)
         }
@@ -504,7 +517,7 @@ export function apply(ctx) {
       }
     }
   }
-  queueMicrotask(recoverPendingReports)
+  queueMicrotask(() => { void recoverPendingReports() })
 
   let sessionQuery
   if (typeof ctx.inject === 'function') {
@@ -1113,7 +1126,7 @@ export function apply(ctx) {
       const body = envelope(senderId, message, parentId, isChildTask)
         + (isChildTask ? `\n${taskProtocol(senderId)}` : '')
 
-      if (parentId && targetId === parentId && deliverAsAgentMessage(targetId, senderId, body)) {
+      if (parentId && targetId === parentId && await deliverAsAgentMessage(targetId, senderId, body)) {
         if (pendingReports.delete(senderId)) savePendingReports(pendingReports)
         audit({ action: 'message-delivered-collapsed', targetId, senderId, chars: message.length })
         return { delivered: true, sessionId: targetId }

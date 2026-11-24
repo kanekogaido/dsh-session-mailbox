@@ -1,47 +1,47 @@
 {
-  "name": "@local/dsh-session-mailbox",
-  "version": "0.3.15",
-  "private": true,
-  "type": "module",
-  "description": "Cross-session links, mailbox ACL, and a native-sidebar session tree for DeepSeek Harness.",
-  "license": "MIT",
-  "author": "kanekogaido",
-  "keywords": [
-    "dsh",
-    "deepseek-harness",
-    "plugin",
-    "bundle",
-    "cross-session",
-    "multi-agent"
-  ],
-  "homepage": "https://github.com/kanekogaido/dsh-session-mailbox#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/kanekogaido/dsh-session-mailbox.git"
-  },
-  "bugs": {
-    "url": "https://github.com/kanekogaido/dsh-session-mailbox/issues"
-  },
-  "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
-    "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
-  },
-  "files": [
-    "index.js",
-    "client.js",
-    "cordis.patch.yml",
-    "locale/*.json",
-    "docs",
-    "icon.svg"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web"
-    }
-  }
+    "name":  "@local/dsh-session-mailbox",
+    "version":  "0.3.16",
+    "private":  true,
+    "type":  "module",
+    "description":  "Cross-session links, mailbox ACL, and a native-sidebar session tree for DeepSeek Harness.",
+    "license":  "MIT",
+    "author":  "kanekogaido",
+    "keywords":  [
+                     "dsh",
+                     "deepseek-harness",
+                     "plugin",
+                     "bundle",
+                     "cross-session",
+                     "multi-agent"
+                 ],
+    "homepage":  "https://github.com/kanekogaido/dsh-session-mailbox#readme",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git+https://github.com/kanekogaido/dsh-session-mailbox.git"
+                   },
+    "bugs":  {
+                 "url":  "https://github.com/kanekogaido/dsh-session-mailbox/issues"
+             },
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./client.js",
+                    "./locale/*.json":  "./locale/*.json",
+                    "./icon":  "./icon.svg"
+                },
+    "files":  [
+                  "index.js",
+                  "client.js",
+                  "cordis.patch.yml",
+                  "locale/*.json",
+                  "docs",
+                  "icon.svg"
+              ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web"
+                           }
+            }
 }

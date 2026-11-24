@@ -494,6 +494,61 @@ export function apply(ctx) {
   })
 
   ctx.tools.register({
+    name: 'create_child_session',
+    description:
+      'Create a brand-new DSH session, attach it under the calling session, and send it a first prompt. '
+      + 'Use this when the user asks to open a new child session for an independent task.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'First message the new session should process.',
+        },
+        cwd: {
+          type: 'string',
+          description: 'Directory for the new session. Omit to use the current Host working directory.',
+        },
+      },
+      required: ['prompt'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          sessionId: { type: 'string' },
+          parentId: { type: 'string' },
+        },
+        required: ['sessionId', 'parentId'],
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `created child session ${value.sessionId} under ${value.parentId}`,
+      }],
+    },
+    async execute(args, exec) {
+      const parentId = callerId(exec)
+      const promptText = readText(args, 'prompt')
+      const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : process.cwd()
+      const created = await ctx.sessionController.create({ cwd })
+      const sessionId = created && created.sessionId
+      if (!sessionId) throw new Error('session/create returned no session id')
+      const currentGroups = loadGroups()
+      link(currentGroups, sessionId, parentId)
+      audit({ action: 'create-child', childId: sessionId, parentId, actor: 'tool', cwd })
+      await ctx.sessionController.prompt({
+        requestId: randomUUID(),
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: promptText }],
+      }, exec.signal)
+      return { sessionId, parentId }
+    },
+  })
+
+  ctx.tools.register({
     name: 'send_session_message',
     description:
       'Send a message to another DSH session by its session id. '

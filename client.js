@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
     }
 
     const API = '/session-mailbox'
-    const CLIENT_VERSION = '0.3.20'
+    const CLIENT_VERSION = '0.3.21'
     const NO_FOLDER = '无文件夹'
 
     /* ---------------------------------------------------------------------

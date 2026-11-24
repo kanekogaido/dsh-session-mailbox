@@ -8,11 +8,14 @@ parent and kept in a persisted tree.
 
 - `get_current_session()` — returns this session's id and parent id.
 - `create_child_session({ prompt?, cwd? })` — create a session under the caller in the persisted tree
-  and optionally send a first prompt. A prompt section makes this the default action for an ordinary
-  “新建会话” request; only an explicit “创建子 agent/子代理” request should use a native subagent.
-- `send_session_message({ to, message })` — deliver a message to another session. The receiver gets
-  a user-role message wrapped in a `<session-message from-session="…" from-parent="…" hop-chain="…">`
-  envelope, followed by a note saying it came from another session rather than from the user.
+  and optionally queue a first prompt. Dispatch is fire-and-forget: the caller returns immediately.
+  A prompt section makes this the default action for an ordinary “新建会话” request; only an explicit
+  “创建子 agent/子代理” request should use a native subagent.
+- `send_session_message({ to, message })` — queue a message for another session and return
+  immediately. The receiver gets a user-role message wrapped in a
+  `<session-message from-session="…" from-parent="…" hop-chain="…">` envelope, followed by a note
+  saying it came from another session rather than from the user. When `to` is a direct child, the
+  Host auto-reports the child's final turn text back to the sender.
 - `attach_session({ child, parent })` — place a session under a parent, replacing any old parent.
   Only the child or the parent may call it; self-links and cycles are rejected.
 - `detach_session({ child })` — remove a session from its parent, restoring it to top level.
@@ -51,6 +54,20 @@ Links live in `<DSH_PROFILE_DIR>\session-mailbox\groups.json` (falling back to
 overrides the path. The file is read when the bundle activates and by each HTTP mutation; it is
 rewritten after every change using a temp file and rename. Records carry `parentId`, `updatedAt`
 and `order`; sibling order is stored explicitly. Deleting it resets all links.
+
+## Independent child tasks and auto-report
+
+A parent can dispatch work without waiting. Both `create_child_session({ prompt })` and
+`send_session_message({ to: child, message })` queue the target prompt and return; the parent stays
+available for the user. For a direct child the Host records a pending task, listens to
+`session/event`, caches the child's last `assistant/message` text, and on `turn/end` queues an
+`auto-report="true"` session-message back to the parent. Failed/aborted turns report the reason plus
+any final text. If the child sends a manual `send_session_message` to its parent first, the pending
+task is marked manual and the automatic copy is skipped.
+
+The task instruction appended to a dispatched prompt tells the child to work independently, avoid
+progress messages, and finish with one final result. The parent should not sleep, poll, or watch
+files while the child works.
 
 ## How a leader/follower run works
 

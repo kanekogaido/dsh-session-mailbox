@@ -35,6 +35,9 @@ own direct children), and a leader can see and change the tree.
   assistant through `create_child_session`, creating a child under the current session in this tree.
   Only an explicit “创建子 agent / 子代理” request uses a native subagent; there is no extra
   “New session” button in the sidebar.
+- Independent child work: dispatching to a child returns immediately; the parent stays available for
+  normal conversation. When the child turn ends, the Host automatically forwards its final text to the
+  parent as a `session-message` with `auto-report="true"`; the parent does not poll or wait.
 
 ## Native sidebar
 
@@ -59,8 +62,8 @@ button to this sidebar; the new-session behavior is the assistant tool policy de
 | Tool | Parameters | What it does |
 | --- | --- | --- |
 | `get_current_session` | none | Returns `sessionId` and `parentId` (empty when top-level). |
-| `create_child_session` | `prompt?`, `cwd?` | Creates a child session under the caller. This is the default for an ordinary new-session request; omit `prompt` to leave it idle. |
-| `send_session_message` | `to`, `message` | Delivers `message` to session `to`, subject to the link ACL. |
+| `create_child_session` | `prompt?`, `cwd?` | Creates a child and queues its first prompt without blocking the caller. This is the default for an ordinary new-session request; omit `prompt` to leave it idle. |
+| `send_session_message` | `to`, `message` | Queues a message for session `to` and returns immediately. When `to` is a direct child, the child's final turn text is auto-reported back to the sender. |
 | `attach_session` | `child`, `parent` | Puts `child` under `parent`, replacing an existing parent; rejects self-links and cycles. |
 | `detach_session` | `child` | Removes `child` from its parent, making it top-level again. |
 | `list_session_tree` | none | Returns all persisted links as `{ sessionId, parentId }` plus root ids. |
@@ -109,16 +112,23 @@ small JSON file, not SQLite.
 
 ## How delivery works
 
-`send_session_message` calls the Host's session controller:
+`send_session_message` queues the prompt on the Host's session controller and returns without
+waiting for the target turn:
 
 ```js
-await ctx.sessionController.prompt({
+void Promise.resolve(ctx.sessionController.prompt({
   requestId: randomUUID(),
   sessionId: targetId,
   mode: 'queue',
   content: [{ type: 'text', text: envelope(senderId, message, parentId) }],
-}, exec.signal)
+})).catch(reportDispatchError)
 ```
+
+`create_child_session` uses the same non-blocking dispatch for its optional first prompt. When the
+target is a direct child, the Host records a pending task and watches `session/event`: it caches the
+child's last `assistant/message` text and, on `turn/end`, queues that text back to the parent as an
+`auto-report="true"` message. A child's manual `send_session_message` to its parent marks the task as
+manually reported, so the final result is not duplicated.
 
 The target receives a normal user-role message whose text is:
 

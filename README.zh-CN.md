@@ -32,6 +32,8 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 - 新建会话意图：普通「新建一个会话 / 开个新会话 / 再来一个会话」由助手通过
   `create_child_session` 处理，在当前会话下创建子会话；只有明确说「创建子 agent / 子代理」才使用
   原生 subagent。侧栏不额外放「新建会话」按钮。
+- 子会话独立工作：派发任务后立即返回，父会话继续正常对话，不等待、不轮询。子会话回合结束时，
+  Host 自动把它的最终文本作为 `auto-report="true"` 的 `session-message` 发回父会话。
 
 ## 原生侧栏
 
@@ -54,8 +56,8 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 | 工具 | 参数 | 作用 |
 | --- | --- | --- |
 | `get_current_session` | 无 | 返回 `sessionId` 与 `parentId`（顶层为空串）。 |
-| `create_child_session` | `prompt?`、`cwd?` | 在当前会话下创建子会话；普通「新建会话」的默认动作，省略 `prompt` 则创建空闲子会话。 |
-| `send_session_message` | `to`、`message` | 把 `message` 投递到会话 `to`，受链接 ACL 约束。 |
+| `create_child_session` | `prompt?`、`cwd?` | 在当前会话下创建子会话并异步发送首条 prompt，不阻塞调用方；省略 `prompt` 则创建空闲子会话。 |
+| `send_session_message` | `to`、`message` | 异步投递到会话 `to` 并立即返回；目标是直接子会话时，子会话最终文本会自动汇报回发送方。 |
 | `attach_session` | `child`、`parent` | 把 `child` 挂到 `parent` 下，替换旧父会话；拒绝自链和环。 |
 | `detach_session` | `child` | 把 `child` 从父会话摘除，恢复为顶层。 |
 | `list_session_tree` | 无 | 返回所有持久化链接 `{ sessionId, parentId }` 与根 id。 |
@@ -100,16 +102,21 @@ attach/detach 或兄弟重排后重写（临时文件 + rename）。每条记录
 
 ## 投递方式
 
-`send_session_message` 调用 Host 的 session controller：
+`send_session_message` 把 prompt 放进 Host 的 session controller 队列后立即返回，不等目标回合：
 
 ```js
-await ctx.sessionController.prompt({
+void Promise.resolve(ctx.sessionController.prompt({
   requestId: randomUUID(),
   sessionId: targetId,
   mode: 'queue',
   content: [{ type: 'text', text: envelope(senderId, message, parentId) }],
-}, exec.signal)
+})).catch(reportDispatchError)
 ```
+
+`create_child_session` 的首条 prompt 也采用同样的非阻塞派发。目标是直接子会话时，Host 会记下
+pending task 并监听 `session/event`：缓存子会话最后一条 `assistant/message` 的文本，在 `turn/end`
+时把它作为 `auto-report="true"` 的消息发回父会话。子会话手动 `send_session_message` 给父会话时
+会把该任务标记为 manual，避免自动汇报重复。
 
 目标会话收到一条 user 角色消息，正文形如：
 

@@ -79,7 +79,10 @@ available for the user. For a direct child the Host records a pending task, list
 `session/event`, caches the child's last `assistant/message` text, and on `turn/end` queues an
 `auto-report="true"` session-message back to the parent. Failed/aborted turns report the reason plus
 any final text. If the child sends a manual `send_session_message` to its parent first, the pending
-task is marked manual and the automatic copy is skipped.
+task is marked manual and the automatic copy is skipped. The pending task and cached text are also
+written to `pending.json` beside `groups.json`, so a plugin reload or DSH restart does not lose an
+in-flight child's report; on startup the Host recovers a completed child whose final text was
+already captured.
 
 Delivery uses the native `agent-message` source (`{ kind: 'agent-message', form: 'relay',
 senderSessionId }`) through `ctx.agents.get(parentId).followup(...)`. The Chat client classifies this

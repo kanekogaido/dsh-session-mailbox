@@ -91,6 +91,70 @@ function saveGroups(groups) {
   }
 }
 
+function pendingPath() {
+  return join(dirname(statePath()), 'pending.json')
+}
+
+function loadPendingReports() {
+  const file = pendingPath()
+  const pending = new Map()
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || !parsed.pending || typeof parsed.pending !== 'object') {
+      return pending
+    }
+    for (const [childId, record] of Object.entries(parsed.pending)) {
+      if (!ID_RE.test(childId) || !record || typeof record !== 'object') continue
+      const parentId = typeof record.parentId === 'string' ? record.parentId.trim() : ''
+      const requestId = typeof record.requestId === 'string' ? record.requestId : ''
+      if (!ID_RE.test(parentId) || !requestId) continue
+      pending.set(childId, {
+        parentId,
+        requestId,
+        at: Number.isFinite(record.at) ? record.at : Date.now(),
+        manual: record.manual === true,
+        text: typeof record.text === 'string' ? record.text : '',
+      })
+    }
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return pending
+    console.warn(`[session-mailbox] could not read ${file}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return pending
+}
+
+function savePendingReports(pending) {
+  const file = pendingPath()
+  mkdirSync(dirname(file), { recursive: true })
+  const records = {}
+  for (const [childId, record] of pending) {
+    records[childId] = {
+      parentId: record.parentId,
+      requestId: record.requestId,
+      at: record.at,
+      manual: record.manual === true,
+      ...(record.text ? { text: record.text } : {}),
+    }
+  }
+  const text = `${JSON.stringify({
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    pending: records,
+  }, null, 2)}\n`
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`
+  writeFileSync(temp, text, 'utf8')
+  try {
+    renameSync(temp, file)
+  } catch {
+    writeFileSync(file, text, 'utf8')
+    try {
+      rmSync(temp, { force: true })
+    } catch {
+      // Best effort: the durable file has already been written.
+    }
+  }
+}
+
 function parentOf(groups, sessionId) {
   const record = groups.get(sessionId)
   return record ? record.parentId : null
@@ -320,13 +384,14 @@ function sendJson(response, status, value) {
 
 export function apply(ctx) {
   const groups = loadGroups()
-  const pendingReports = new Map()
+  const pendingReports = loadPendingReports()
   const lastAssistantText = new Map()
   const detachedSignal = new AbortController().signal
 
   const queueChildTask = (childId, parentId, requestId) => {
     lastAssistantText.delete(childId)
-    pendingReports.set(childId, { parentId, requestId, at: Date.now(), manual: false })
+    pendingReports.set(childId, { parentId, requestId, at: Date.now(), manual: false, text: '' })
+    savePendingReports(pendingReports)
   }
 
   const deliverAsAgentMessage = (targetId, senderId, text) => {
@@ -359,7 +424,7 @@ export function apply(ctx) {
       requestId: task.requestId,
       chars: text.length,
     })
-    if (deliverAsAgentMessage(task.parentId, childId, body)) return
+    if (deliverAsAgentMessage(task.parentId, childId, body)) return true
     try {
       const work = ctx.sessionController.prompt({
         requestId: randomUUID(),
@@ -370,8 +435,10 @@ export function apply(ctx) {
       void Promise.resolve(work).catch((error) => {
         audit({ action: 'auto-report-error', childId, parentId: task.parentId, error: String(error) })
       })
+      return true
     } catch (error) {
       audit({ action: 'auto-report-error', childId, parentId: task.parentId, error: String(error) })
+      return false
     }
   }
 
@@ -382,16 +449,24 @@ export function apply(ctx) {
         if (event.type === 'assistant/message') {
           const message = event.data && event.data.message
           const text = assistantText(message)
-          if (text) lastAssistantText.set(session.id, text)
+          if (text) {
+            lastAssistantText.set(session.id, text)
+            const task = pendingReports.get(session.id)
+            if (task) {
+              task.text = text
+              savePendingReports(pendingReports)
+            }
+          }
           return
         }
         if (event.type !== 'turn/end') return
         const task = pendingReports.get(session.id)
         if (!task) return
-        pendingReports.delete(session.id)
-        const text = lastAssistantText.get(session.id) || ''
+        const text = task.text || lastAssistantText.get(session.id) || ''
         lastAssistantText.delete(session.id)
         if (task.manual) {
+          pendingReports.delete(session.id)
+          savePendingReports(pendingReports)
           audit({ action: 'auto-report-skipped-manual', childId: session.id, parentId: task.parentId })
           return
         }
@@ -399,16 +474,37 @@ export function apply(ctx) {
         const failure = reason && reason.kind !== 'completed'
           ? `Child task ended with ${reason.kind}.`
           : ''
-        deliverChildReport(
+        const delivered = deliverChildReport(
           task,
           session.id,
           [text, failure].filter(Boolean).join('\n\n') || '(child session finished without a text result)',
         )
+        if (delivered) {
+          pendingReports.delete(session.id)
+          savePendingReports(pendingReports)
+        }
       } catch (error) {
         audit({ action: 'auto-report-error', childId: session && session.id, error: String(error) })
       }
     })
   }
+
+  const recoverPendingReports = () => {
+    for (const [childId, task] of [...pendingReports]) {
+      try {
+        const agent = typeof ctx.agents?.get === 'function' ? ctx.agents.get(childId) : undefined
+        if (agent) continue
+        if (!task.text) continue
+        if (deliverChildReport(task, childId, task.text)) {
+          pendingReports.delete(childId)
+          savePendingReports(pendingReports)
+        }
+      } catch (error) {
+        audit({ action: 'pending-recovery-error', childId, error: String(error) })
+      }
+    }
+  }
+  queueMicrotask(recoverPendingReports)
 
   let sessionQuery
   if (typeof ctx.inject === 'function') {
@@ -746,11 +842,11 @@ export function apply(ctx) {
             content: [{ type: 'text', text: body }],
           }, detachedSignal)
           void Promise.resolve(work).catch((error) => {
-            pendingReports.delete(sessionId)
+            if (pendingReports.delete(sessionId)) savePendingReports(pendingReports)
             audit({ action: 'task-dispatch-error', childId: sessionId, parentId, error: String(error) })
           })
         } catch (error) {
-          pendingReports.delete(sessionId)
+          if (pendingReports.delete(sessionId)) savePendingReports(pendingReports)
           audit({ action: 'task-dispatch-error', childId: sessionId, parentId, error: String(error) })
         }
       }
@@ -910,11 +1006,11 @@ export function apply(ctx) {
             content: [{ type: 'text', text: body }],
           }, detachedSignal)
           void Promise.resolve(work).catch((error) => {
-            pendingReports.delete(childId)
+            if (pendingReports.delete(childId)) savePendingReports(pendingReports)
             audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
           })
         } catch (error) {
-          pendingReports.delete(childId)
+          if (pendingReports.delete(childId)) savePendingReports(pendingReports)
           audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
         }
         audit({ action: 'dispatch-task', childId, parentId, role, created: true, matchedBy: 'new-child' })
@@ -938,11 +1034,11 @@ export function apply(ctx) {
           content: [{ type: 'text', text: body }],
         }, detachedSignal)
         void Promise.resolve(work).catch((error) => {
-          pendingReports.delete(childId)
+          if (pendingReports.delete(childId)) savePendingReports(pendingReports)
           audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
         })
       } catch (error) {
-        pendingReports.delete(childId)
+        if (pendingReports.delete(childId)) savePendingReports(pendingReports)
         audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
       }
       audit({ action: 'dispatch-task', childId, parentId, role, created: false, matchedBy })
@@ -1006,7 +1102,10 @@ export function apply(ctx) {
       }
 
       const pending = pendingReports.get(senderId)
-      if (pending && targetId === pending.parentId) pending.manual = true
+      if (pending && targetId === pending.parentId) {
+        pending.manual = true
+        savePendingReports(pendingReports)
+      }
 
       const isChildTask = parentOf(currentGroups, targetId) === senderId
       const requestId = randomUUID()
@@ -1015,6 +1114,7 @@ export function apply(ctx) {
         + (isChildTask ? `\n${taskProtocol(senderId)}` : '')
 
       if (parentId && targetId === parentId && deliverAsAgentMessage(targetId, senderId, body)) {
+        if (pendingReports.delete(senderId)) savePendingReports(pendingReports)
         audit({ action: 'message-delivered-collapsed', targetId, senderId, chars: message.length })
         return { delivered: true, sessionId: targetId }
       }
@@ -1027,11 +1127,11 @@ export function apply(ctx) {
           content: [{ type: 'text', text: body }],
         }, detachedSignal)
         void Promise.resolve(work).catch((error) => {
-          if (isChildTask) pendingReports.delete(targetId)
+          if (isChildTask && pendingReports.delete(targetId)) savePendingReports(pendingReports)
           audit({ action: 'message-dispatch-error', targetId, senderId, error: String(error) })
         })
       } catch (error) {
-        if (isChildTask) pendingReports.delete(targetId)
+        if (isChildTask && pendingReports.delete(targetId)) savePendingReports(pendingReports)
         audit({ action: 'message-dispatch-error', targetId, senderId, error: String(error) })
       }
 

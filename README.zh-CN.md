@@ -34,6 +34,8 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
   原生 subagent。侧栏不额外放「新建会话」按钮。
 - 子会话独立工作：派发任务后立即返回，父会话继续正常对话，不等待、不轮询。子会话回合结束时，
   Host 自动把它的最终文本作为 `auto-report="true"` 的 `session-message` 发回父会话。
+- 主会话优先做调度：除非用户明确说主会话自己操作或修改，制作任务默认用 `dispatch_task` 派给
+  直接子会话；按角色、标题和最近任务匹配，没有匹配就在主会话下新建一个。子会话默认不再向下转派。
 
 ## 原生侧栏
 
@@ -56,7 +58,8 @@ session id，并可以用同一个工具回复。它还维护**持久化的父�
 | 工具 | 参数 | 作用 |
 | --- | --- | --- |
 | `get_current_session` | 无 | 返回 `sessionId` 与 `parentId`（顶层为空串）。 |
-| `create_child_session` | `prompt?`、`cwd?` | 在当前会话下创建子会话并异步发送首条 prompt，不阻塞调用方；省略 `prompt` 则创建空闲子会话。 |
+| `create_child_session` | `prompt?`、`cwd?`、`role?` | 在当前会话下创建子会话并异步发送首条 prompt，不阻塞调用方；省略 `prompt` 则创建空闲子会话。`role` 是 `design`/`testing` 之类的路由标签。 |
+| `dispatch_task` | `task`、`role?`、`child?`、`cwd?`、`createIfMissing?` | 主会话默认调度：把自包含的制作任务派给匹配的直接子会话（按角色/标题/最近任务），没有匹配就在当前会话下新建。立即返回，子会话结束时自动汇报。 |
 | `send_session_message` | `to`、`message` | 异步投递到会话 `to` 并立即返回；目标是直接子会话时，子会话最终文本会自动汇报回发送方。 |
 | `attach_session` | `child`、`parent` | 把 `child` 挂到 `parent` 下，替换旧父会话；拒绝自链和环。 |
 | `detach_session` | `child` | 把 `child` 从父会话摘除，恢复为顶层。 |

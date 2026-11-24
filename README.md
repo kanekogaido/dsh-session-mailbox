@@ -38,6 +38,10 @@ own direct children), and a leader can see and change the tree.
 - Independent child work: dispatching to a child returns immediately; the parent stays available for
   normal conversation. When the child turn ends, the Host automatically forwards its final text to the
   parent as a `session-message` with `auto-report="true"`; the parent does not poll or wait.
+- Coordinator-first main session: unless the user explicitly says the main session itself should
+  operate or modify, production work goes through `dispatch_task`. It reuses a direct child whose
+  stored role, title, or recent task matches, and creates a new child under the main session when
+  none matches. Children do not delegate further unless their task explicitly requires it.
 
 ## Native sidebar
 
@@ -62,7 +66,8 @@ button to this sidebar; the new-session behavior is the assistant tool policy de
 | Tool | Parameters | What it does |
 | --- | --- | --- |
 | `get_current_session` | none | Returns `sessionId` and `parentId` (empty when top-level). |
-| `create_child_session` | `prompt?`, `cwd?` | Creates a child and queues its first prompt without blocking the caller. This is the default for an ordinary new-session request; omit `prompt` to leave it idle. |
+| `create_child_session` | `prompt?`, `cwd?`, `role?` | Creates a child and queues its first prompt without blocking the caller. This is the default for an ordinary new-session request; omit `prompt` to leave it idle. `role` is a routing label such as `design` or `testing`. |
+| `dispatch_task` | `task`, `role?`, `child?`, `cwd?`, `createIfMissing?` | Coordinator default: routes a self-contained production task to a matching direct child (by role/title/recent task), or creates a child when none matches. Returns immediately; the child auto-reports on turn end. |
 | `send_session_message` | `to`, `message` | Queues a message for session `to` and returns immediately. When `to` is a direct child, the child's final turn text is auto-reported back to the sender. |
 | `attach_session` | `child`, `parent` | Puts `child` under `parent`, replacing an existing parent; rejects self-links and cycles. |
 | `detach_session` | `child` | Removes `child` from its parent, making it top-level again. |

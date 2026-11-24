@@ -39,10 +39,14 @@ function loadGroups() {
         if (!ID_RE.test(childId)) continue
         const parentId = record && typeof record.parentId === 'string' ? record.parentId.trim() : ''
         if (!ID_RE.test(parentId)) continue
+        const role = record && typeof record.role === 'string' ? record.role.trim() : ''
+        const lastTaskAt = record && typeof record.lastTaskAt === 'string' ? record.lastTaskAt : ''
         groups.set(childId, {
           parentId,
           updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : new Date().toISOString(),
           order: record && Number.isFinite(record.order) ? record.order : fallbackOrder,
+          ...(role ? { role } : {}),
+          ...(lastTaskAt ? { lastTaskAt } : {}),
         })
         fallbackOrder += 1
       }
@@ -60,7 +64,13 @@ function saveGroups(groups) {
   mkdirSync(dirname(file), { recursive: true })
   const records = {}
   for (const [childId, record] of groups) {
-    records[childId] = { parentId: record.parentId, updatedAt: record.updatedAt, order: record.order }
+    records[childId] = {
+      parentId: record.parentId,
+      updatedAt: record.updatedAt,
+      order: record.order,
+      ...(record.role ? { role: record.role } : {}),
+      ...(record.lastTaskAt ? { lastTaskAt: record.lastTaskAt } : {}),
+    }
   }
   const text = `${JSON.stringify({
     version: 1,
@@ -129,6 +139,8 @@ function link(groups, childId, parentId, requestedOrder) {
     parentId,
     updatedAt: new Date().toISOString(),
     order,
+    ...(previousRecord?.role ? { role: previousRecord.role } : {}),
+    ...(previousRecord?.lastTaskAt ? { lastTaskAt: previousRecord.lastTaskAt } : {}),
   })
   saveGroups(groups)
   return { changed: previous !== parentId || previousRecord?.order !== order, previous }
@@ -151,6 +163,25 @@ function reorder(groups, childId, targetId, after) {
   })
   saveGroups(groups)
   return { changed: true, parentId }
+}
+
+function updateChildMeta(groups, childId, patch) {
+  const record = groups.get(childId)
+  if (!record) return false
+  const next = { ...record }
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'role')) {
+    const role = typeof patch.role === 'string' ? patch.role.trim() : ''
+    if (role) next.role = role
+    else delete next.role
+  }
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'lastTaskAt')) {
+    const at = typeof patch.lastTaskAt === 'string' ? patch.lastTaskAt : ''
+    if (at) next.lastTaskAt = at
+    else delete next.lastTaskAt
+  }
+  groups.set(childId, next)
+  saveGroups(groups)
+  return true
 }
 
 function unlink(groups, childId) {
@@ -372,13 +403,25 @@ export function apply(ctx) {
         name: 'session-mailbox:new-session-policy',
         order: 1500,
         text:
-          'Session-mailbox policy for this profile: when the user asks to open, start, or create a new session '
+          'Session-mailbox policy for this profile. '
+          + 'New-session requests: when the user asks to open, start, or create a new session '
           + '(for example “新建一个会话”, “开个新会话”, “再来一个会话”, or similar) without explicitly asking for a '
           + 'top-level new session, treat it as a request to create a child session under the current session and call '
           + 'the `create_child_session` tool. Do not create a top-level session for that request and do not tell the '
           + 'user to click a New Session button. Only when the user explicitly says “创建子 agent”, “子代理”, or '
           + '“创建子对话” may you use the native subagent tool; an ordinary new-session request must use '
           + '`create_child_session`. If the user explicitly asks for a top-level session, respect that exception. '
+          + 'Main-session execution policy: a session with no parent is the main/coordinator session. The main session '
+          + 'must not directly create, edit, generate, build, test, or redesign the requested artifact by default. '
+          + 'Unless the user explicitly says “你来操作”, “你来修改”, “你直接做”, “你来做”, or an equivalent '
+          + 'instruction that the main session itself should perform the work, dispatch production work with the '
+          + '`dispatch_task` tool. Pass a self-contained task and a short `role` such as design, implementation, '
+          + 'testing, or research. `dispatch_task` reuses a matching direct child by role/title/recent task, and '
+          + 'creates a new child under the main session when none matches. The main session may directly answer '
+          + 'questions, explain, inspect status, and summarize reports; it must not silently do the production work '
+          + 'itself. If multiple children plausibly match, choose the most recently active matching child rather than '
+          + 'asking. A child session must do its assigned task itself and must not delegate further unless the task '
+          + 'explicitly requires it. '
           + 'After dispatching work to a child session, do not wait, sleep, poll, or watch its files; continue the '
           + 'conversation with the user normally. The mailbox host delivers the child\'s final result back as a '
           + 'session-message when the child turn ends.',
@@ -425,6 +468,7 @@ export function apply(ctx) {
           parentId: record.parentId,
           updatedAt: record.updatedAt,
           order: record.order ?? 0,
+          ...(record.role ? { role: record.role } : {}),
         })).sort((a, b) => a.parentId.localeCompare(b.parentId) || (a.order - b.order) || a.childId.localeCompare(b.childId))
         const sessions = items.map((item) => ({
           sessionId: item.sessionId,
@@ -638,6 +682,10 @@ export function apply(ctx) {
           type: 'string',
           description: 'Directory for the new session. Omit to use the current Host working directory.',
         },
+        role: {
+          type: 'string',
+          description: 'Optional short role label for routing, e.g. design, implementation, testing, research.',
+        },
       },
     },
     output: {
@@ -659,12 +707,14 @@ export function apply(ctx) {
       const parentId = callerId(exec)
       const promptText = typeof args.prompt === 'string' ? args.prompt.trim() : ''
       const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : process.cwd()
+      const role = typeof args.role === 'string' ? args.role.trim() : ''
       const created = await ctx.sessionController.create({ cwd })
       const sessionId = created && created.sessionId
       if (!sessionId) throw new Error('session/create returned no session id')
       const currentGroups = loadGroups()
       link(currentGroups, sessionId, parentId)
-      audit({ action: 'create-child', childId: sessionId, parentId, actor: 'tool', cwd })
+      if (role) updateChildMeta(currentGroups, sessionId, { role })
+      audit({ action: 'create-child', childId: sessionId, parentId, actor: 'tool', cwd, role })
       if (promptText) {
         const requestId = randomUUID()
         queueChildTask(sessionId, parentId, requestId)
@@ -686,6 +736,198 @@ export function apply(ctx) {
         }
       }
       return { sessionId, parentId }
+    },
+  })
+
+  ctx.tools.register({
+    name: 'dispatch_task',
+    description:
+      'Default way for the main session to get production work done: dispatch a self-contained task to a matching '
+      + 'direct child session, or create a child under the main session when none matches. Use this instead of '
+      + 'directly editing, generating, building, testing, or redesigning the artifact, unless the user explicitly '
+      + 'says the main session itself should do it. The call returns immediately; the child runs independently and '
+      + 'the mailbox host forwards its final result back when the child turn ends.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        task: {
+          type: 'string',
+          description: 'Self-contained task with goal, paths, constraints, and acceptance criteria.',
+        },
+        role: {
+          type: 'string',
+          description: 'Short role label for routing, e.g. design, implementation, testing, research.',
+        },
+        child: {
+          type: 'string',
+          description: 'Optional direct child session id to use explicitly.',
+        },
+        cwd: {
+          type: 'string',
+          description: 'Working directory for a newly created child session.',
+        },
+        createIfMissing: {
+          type: 'boolean',
+          description: 'Create a child when no direct child matches. Defaults to true.',
+        },
+      },
+      required: ['task'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          childId: { type: 'string' },
+          parentId: { type: 'string' },
+          created: { type: 'boolean' },
+          matchedBy: { type: 'string' },
+        },
+        required: ['childId', 'parentId', 'created', 'matchedBy'],
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `${value.created ? 'created and dispatched to' : 'dispatched to'} child session ${value.childId}`
+          + ` (${value.matchedBy})`,
+      }],
+    },
+    async execute(args, exec) {
+      const parentId = callerId(exec)
+      const task = readText(args, 'task')
+      const role = typeof args.role === 'string' ? args.role.trim() : ''
+      const explicitChild = typeof args.child === 'string' && args.child.trim() ? readId(args, 'child') : ''
+      const createIfMissing = args.createIfMissing !== false
+      const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : process.cwd()
+
+      const currentGroups = loadGroups()
+      const children = directChildren(currentGroups, parentId)
+      if (explicitChild && !children.includes(explicitChild)) {
+        throw new Error(`session ${explicitChild} is not a direct child of ${parentId}`)
+      }
+      if (children.length === 0 && !createIfMissing) {
+        throw new Error('no child session exists and createIfMissing is false')
+      }
+
+      const list = await ctx.sessionController.list({})
+      const items = Array.isArray(list && list.items) ? list.items : []
+      const itemById = new Map(items.map((item) => [item.sessionId, item]))
+      const titleById = new Map()
+      if (sessionQuery && typeof sessionQuery.readTitleSnapshots === 'function' && items.length > 0) {
+        try {
+          const results = await sessionQuery.readTitleSnapshots(items.map((item) => item.sessionId))
+          for (const result of results || []) {
+            if (result && result.status === 'fulfilled' && result.value && result.value.title && result.value.title.title) {
+              titleById.set(result.sessionId, result.value.title.title)
+            }
+          }
+        } catch {
+          // Titles improve routing but are not required.
+        }
+      }
+
+      const taskLower = task.toLowerCase()
+      const roleLower = role.toLowerCase()
+      const scoreOf = (childId) => {
+        const record = currentGroups.get(childId) || {}
+        const item = itemById.get(childId) || {}
+        const title = (titleById.get(childId) || '').toLowerCase()
+        const childRole = typeof record.role === 'string' ? record.role.toLowerCase() : ''
+        let score = 0
+        if (roleLower && childRole === roleLower) score += 12
+        if (roleLower && title.includes(roleLower)) score += 6
+        if (childRole && taskLower.includes(childRole)) score += 4
+        if (title && taskLower.includes(title)) score += 5
+        for (const part of title.split(/[\s/|,，、:：;；\-]+/u)) {
+          if (part.length >= 2 && taskLower.includes(part)) score += 2
+        }
+        return score
+      }
+      const recencyOf = (childId) => {
+        const record = currentGroups.get(childId) || {}
+        const item = itemById.get(childId) || {}
+        return Math.max(
+          Date.parse(record.lastTaskAt || '') || 0,
+          Number(item.updatedAt) || 0,
+          Date.parse(record.updatedAt || '') || 0,
+        )
+      }
+
+      let childId = ''
+      let matchedBy = ''
+      if (explicitChild) {
+        childId = explicitChild
+        matchedBy = 'explicit'
+      } else if (children.length === 1) {
+        childId = children[0]
+        matchedBy = 'only-child'
+      } else if (children.length > 1) {
+        const ranked = children
+          .map((id) => ({ id, score: scoreOf(id), recency: recencyOf(id) }))
+          .sort((a, b) => b.score - a.score || b.recency - a.recency || a.id.localeCompare(b.id))
+        if (ranked[0] && ranked[0].score > 0) {
+          childId = ranked[0].id
+          matchedBy = 'role-title-recent'
+        }
+      }
+
+      if (!childId) {
+        if (!createIfMissing) throw new Error('no matching direct child session and createIfMissing is false')
+        const created = await ctx.sessionController.create({ cwd })
+        childId = created && created.sessionId
+        if (!childId) throw new Error('session/create returned no session id')
+        const fresh = loadGroups()
+        link(fresh, childId, parentId)
+        if (role) updateChildMeta(fresh, childId, { role })
+        audit({ action: 'dispatch-create-child', childId, parentId, role, cwd })
+        const requestId = randomUUID()
+        queueChildTask(childId, parentId, requestId)
+        const body = `${task}\n${taskProtocol(parentId)}`
+        try {
+          const work = ctx.sessionController.prompt({
+            requestId,
+            sessionId: childId,
+            mode: 'queue',
+            content: [{ type: 'text', text: body }],
+          }, detachedSignal)
+          void Promise.resolve(work).catch((error) => {
+            pendingReports.delete(childId)
+            audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
+          })
+        } catch (error) {
+          pendingReports.delete(childId)
+          audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
+        }
+        audit({ action: 'dispatch-task', childId, parentId, role, created: true, matchedBy: 'new-child' })
+        return { childId, parentId, created: true, matchedBy: 'new-child' }
+      }
+
+      const fresh = loadGroups()
+      const lastTaskAt = new Date().toISOString()
+      updateChildMeta(fresh, childId, {
+        ...(role ? { role } : {}),
+        lastTaskAt,
+      })
+      const requestId = randomUUID()
+      queueChildTask(childId, parentId, requestId)
+      const body = `${envelope(parentId, task, parentOf(fresh, parentId), true)}\n${taskProtocol(parentId)}`
+      try {
+        const work = ctx.sessionController.prompt({
+          requestId,
+          sessionId: childId,
+          mode: 'queue',
+          content: [{ type: 'text', text: body }],
+        }, detachedSignal)
+        void Promise.resolve(work).catch((error) => {
+          pendingReports.delete(childId)
+          audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
+        })
+      } catch (error) {
+        pendingReports.delete(childId)
+        audit({ action: 'task-dispatch-error', childId, parentId, error: String(error) })
+      }
+      audit({ action: 'dispatch-task', childId, parentId, role, created: false, matchedBy })
+      return { childId, parentId, created: false, matchedBy }
     },
   })
 

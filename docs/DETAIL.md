@@ -7,10 +7,15 @@ parent and kept in a persisted tree.
 ## What it adds
 
 - `get_current_session()` — returns this session's id and parent id.
-- `create_child_session({ prompt?, cwd? })` — create a session under the caller in the persisted tree
-  and optionally queue a first prompt. Dispatch is fire-and-forget: the caller returns immediately.
-  A prompt section makes this the default action for an ordinary “新建会话” request; only an explicit
-  “创建子 agent/子代理” request should use a native subagent.
+- `create_child_session({ prompt?, cwd?, role? })` — create a session under the caller in the persisted
+  tree and optionally queue a first prompt. Dispatch is fire-and-forget: the caller returns
+  immediately. `role` is a routing label such as `design` or `testing`. A prompt section makes this
+  the default action for an ordinary “新建会话” request; only an explicit “创建子 agent/子代理”
+  request should use a native subagent.
+- `dispatch_task({ task, role?, child?, cwd?, createIfMissing? })` — coordinator default for
+  production work. It reuses a direct child whose stored role, title or recent task matches, or
+  creates a child under the caller when none matches, then queues the task without blocking. It
+  returns `{ childId, parentId, created, matchedBy }`.
 - `send_session_message({ to, message })` — queue a message for another session and return
   immediately. The receiver gets a user-role message wrapped in a
   `<session-message from-session="…" from-parent="…" hop-chain="…">` envelope, followed by a note
@@ -21,6 +26,12 @@ parent and kept in a persisted tree.
 - `detach_session({ child })` — remove a session from its parent, restoring it to top level.
 - `list_session_tree()` — list all persisted links as `{ sessionId, parentId }` pairs plus roots.
 - `set_session_leader({ leader })` — alias for attaching the caller under a leader.
+
+The Host also registers `session-mailbox:new-session-policy` and the coordinator-first instruction in
+the system prompt. The main session should not create, modify, generate, test or design directly
+unless the user explicitly says it should do the work itself; production requests go through
+`dispatch_task`. Pure questions, explanations, status checks and summaries can be answered by the
+main session directly.
 
 ## Native sidebar
 
@@ -52,8 +63,9 @@ or sidebar visibility.
 Links live in `<DSH_PROFILE_DIR>\session-mailbox\groups.json` (falling back to
 `%USERPROFILE%\.dsh\profiles\<profile>\session-mailbox\groups.json`). `DSH_SESSION_MAILBOX_STATE`
 overrides the path. The file is read when the bundle activates and by each HTTP mutation; it is
-rewritten after every change using a temp file and rename. Records carry `parentId`, `updatedAt`
-and `order`; sibling order is stored explicitly. Deleting it resets all links.
+rewritten after every change using a temp file and rename. Records carry `parentId`, `updatedAt`,
+`order`, and optional `role` / `lastTaskAt`; sibling order is stored explicitly. Deleting it resets
+all links.
 
 ## Independent child tasks and auto-report
 
@@ -68,6 +80,16 @@ task is marked manual and the automatic copy is skipped.
 The task instruction appended to a dispatched prompt tells the child to work independently, avoid
 progress messages, and finish with one final result. The parent should not sleep, poll, or watch
 files while the child works.
+
+## Coordinator-first routing
+
+`dispatch_task` is the normal entry point for production work. Unless the user explicitly asks the
+main session to operate or modify something itself, the main session routes the task instead of
+doing it. Routing considers, in order: an explicit `child` argument; a single direct child; and a
+score over stored `role`, the child title, and the task wording. Ties prefer the most recently
+active child. When nothing matches, a child is created under the main session. The dispatched task
+records `lastTaskAt` and updates `role` when supplied, so later tasks route better. Children do not
+delegate further unless the task explicitly tells them to.
 
 ## How a leader/follower run works
 

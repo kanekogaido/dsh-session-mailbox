@@ -294,6 +294,7 @@ export function apply(ctx) {
   const groups = loadGroups()
   const pendingReports = new Map()
   const lastAssistantText = new Map()
+  const detachedSignal = new AbortController().signal
 
   const queueChildTask = (childId, parentId, requestId) => {
     lastAssistantText.delete(childId)
@@ -315,7 +316,7 @@ export function apply(ctx) {
         sessionId: task.parentId,
         mode: 'queue',
         content: [{ type: 'text', text: body }],
-      })
+      }, detachedSignal)
       void Promise.resolve(work).catch((error) => {
         audit({ action: 'auto-report-error', childId, parentId: task.parentId, error: String(error) })
       })
@@ -674,7 +675,7 @@ export function apply(ctx) {
             sessionId,
             mode: 'queue',
             content: [{ type: 'text', text: body }],
-          })
+          }, detachedSignal)
           void Promise.resolve(work).catch((error) => {
             pendingReports.delete(sessionId)
             audit({ action: 'task-dispatch-error', childId: sessionId, parentId, error: String(error) })
@@ -758,7 +759,7 @@ export function apply(ctx) {
           sessionId: targetId,
           mode: 'queue',
           content: [{ type: 'text', text: body }],
-        })
+        }, detachedSignal)
         void Promise.resolve(work).catch((error) => {
           if (isChildTask) pendingReports.delete(targetId)
           audit({ action: 'message-dispatch-error', targetId, senderId, error: String(error) })

@@ -1,6 +1,6 @@
 {
     "name":  "@local/dsh-session-mailbox",
-    "version":  "0.3.21",
+    "version":  "0.3.22",
     "private":  true,
     "type":  "module",
     "description":  "Cross-session links, mailbox ACL, and a native-sidebar session tree for DeepSeek Harness.",
